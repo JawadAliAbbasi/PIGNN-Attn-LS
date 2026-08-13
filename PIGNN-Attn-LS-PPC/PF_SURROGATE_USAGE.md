@@ -9,27 +9,22 @@ GridFM / GridSFM / LUMINA OPF work. This document is only about power flow.
 
 ---
 
-## 0. Status, before you rely on anything here
+## 0. Status
+
+All three campaigns are complete: 31 grids x 3 implementations, 93 training runs
+and 93 validation passes, every one finished.
 
 | Variant | Training | SimBench checkpoint |
 |---|---|---|
-| `mirror` | **31/31 complete** | final |
-| `graphkit` | **31/31 complete** | final |
-| `mirrorpin` | **1/31 complete — still running** | **provisional, epoch 29 of 40** |
+| `mirror` | 31/31 | final |
+| `mirrorpin` | 31/31 | final |
+| `graphkit` | 31/31 | final |
 
-The `mirrorpin` checkpoint shipped here is a mid-training snapshot. Its filename
-says so:
-
-```
-pf_mirrorpin_SimBench_b64_best_PROVISIONAL_epoch29of40.pt
-```
-
-It will load and it will produce sensible numbers, but **those numbers will
-change** when the run finishes, so do not quote them. It is included only so the
-loading path can be exercised end to end. The final version will replace it
-under the plain name `pf_mirrorpin_SimBench_b64_best.pt`.
-
----
+An earlier version of this bundle shipped `mirrorpin` as a mid-training snapshot
+named `..._PROVISIONAL_epoch29of40.pt`. **That file is superseded and has been
+removed.** If you still have a copy, delete it and use
+`pf_mirrorpin_SimBench_b64_best.pt` (md5 `260dae25a75ff936f8432fc8cd9d53c9`);
+the provisional numbers were worse and should not be quoted.
 
 ## 1. What the three variants are
 
@@ -88,12 +83,12 @@ PowerShell is the same command. Contents:
 ```text
 pf_release/
 ├── ckpt/
-│   ├── pf_mirror_SimBench_b64_best.pt                          77 MB
-│   ├── pf_graphkit_SimBench_b64_best.pt                         77 MB
-│   └── pf_mirrorpin_SimBench_b64_best_PROVISIONAL_epoch29of40.pt 77 MB
+│   ├── pf_mirror_SimBench_b64_best.pt      77 MB
+│   ├── pf_mirrorpin_SimBench_b64_best.pt   77 MB
+│   └── pf_graphkit_SimBench_b64_best.pt    77 MB
 ├── data/
 │   └── SimBench_ppcY_backbone_dc_compile_ppNR_ls0.60-1.40_u0clean_siNR_36000_NR_branchrows_directSI.parquet   393 MB
-├── logs/            training logs for the two finished runs
+├── logs/            training logs for all three runs
 └── scripts/         everything needed to load and run a checkpoint
 ```
 
@@ -169,7 +164,7 @@ python pf_predict.py --PARQUET ../data/SimBench_...parquet \
   --ckpt ../ckpt/pf_graphkit_SimBench_b64_best.pt --variant graphkit
 
 python pf_predict.py --PARQUET ../data/SimBench_...parquet \
-  --ckpt ../ckpt/pf_mirrorpin_SimBench_b64_best_PROVISIONAL_epoch29of40.pt --variant mirrorpin
+  --ckpt ../ckpt/pf_mirrorpin_SimBench_b64_best.pt --variant mirrorpin
 ```
 
 Useful flags:
@@ -194,25 +189,35 @@ is predicted. Match the variant to the filename.
 
 ## 5. Reference numbers, SimBench
 
-From the finished runs, held-out test split:
+Held-out test split, all three final checkpoints:
 
-| Variant | RMSE | \|V\| RMSE | θ RMSE | slope \|V\| | R² \|V\| |
-|---|---|---|---|---|---|
-| `mirror` | 1.203e-03 | 1.048e-03 | 0.034° | 0.998 | 0.9986 |
-| `graphkit` | 3.885e-03 | 1.585e-03 | 0.203° | 0.992 | 0.9922 |
-| `mirrorpin` | *pending* | — | — | — | — |
+| Variant | RMSE | \|V\| MAE | \|V\| RMSE | θ RMSE | slope \|V\| | R² \|V\| |
+|---|---|---|---|---|---|---|
+| `mirror` | 1.203e-03 | 8.297e-04 | 1.048e-03 | 0.034° | 0.998 | 0.9986 |
+| `mirrorpin` | 1.491e-03 | 1.078e-03 | 1.319e-03 | 0.040° | 0.998 | 0.9977 |
+| `graphkit` | 3.885e-03 | 1.279e-03 | 1.584e-03 | 0.203° | 0.992 | 0.9970 |
 
-If your run reproduces the \|V\| RMSE above, your environment is right.
+If your run reproduces the \|V\| RMSE above, your environment is right. Each
+shipped checkpoint was run through `pf_predict.py` and reproduces its training
+run's RMSE exactly.
+
+**SimBench is not the grid that separates these variants.** It is 97% PQ buses,
+so pinning applies to almost nothing and all three land within a factor of 1.5.
+`mirror` posting the best number here is not evidence that it is the better
+model — across the full 31-grid corpus, restricted to PQ buses where all three
+are genuinely predicting, `mirrorpin` wins 16 grids, `graphkit` 12 and `mirror`
+3. The split is mostly by size: `graphkit` wins 12 of the 15 grids at or below
+118 buses, `mirrorpin` 14 of the 16 above.
 
 **On `slope` and `R²`:** these come from a pooled regression of predicted
-against reference values, and they answer a question MAE cannot. \|V\| in pu
-only spans about 0.95–1.10, so a flat predictor of `V = 1.0` posts a small MAE
-while carrying no information at all. Slope 1 means the model tracks the
-reference spread one-for-one; slope well below 1 means it is collapsing toward
-the mean. SimBench is healthy at 0.998. Several harder grids in the corpus are
-not — six sit below 0.5 — so check the slope before trusting a small MAE.
-
----
+against reference values, and they answer a question MAE cannot. |V| in pu only
+spans about 0.95–1.10, so a flat predictor of `V = 1.0` posts a small MAE while
+carrying no information at all. Slope 1 means the model tracks the reference
+spread one-for-one; slope well below 1 means it is collapsing toward the mean.
+SimBench is healthy at 0.998. Much of the corpus is not: on PQ buses, 17 of 31
+grids fall below 0.9 under `mirror` and 7 below 0.5, and `graphkit` reaches a
+*negative* slope on case145 — its prediction is anti-correlated with the
+reference there. Check the slope before trusting a small MAE.
 
 ## 6. Other grids
 
