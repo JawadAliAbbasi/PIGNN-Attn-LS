@@ -31,7 +31,13 @@ def parse():
     p.add_argument("--PARQUET", required=True)
     p.add_argument("--ckpt", required=True)
     p.add_argument("--grid", required=True)
-    p.add_argument("--impl", choices=("mirror", "graphkit"), default="mirror")
+    # mirrorpin is the same architecture and the same weights as mirror; the
+    # only difference is that the head's correction is masked off where the
+    # quantity is a given input. Loading a mirrorpin checkpoint as "mirror"
+    # succeeds silently and scores a different function, so the variant has to
+    # be named explicitly.
+    p.add_argument("--impl", choices=("mirror", "mirrorpin", "graphkit"),
+                   default="mirror")
     p.add_argument("--BATCH", type=int, default=16)
     p.add_argument("--hidden_size", type=int, default=48)
     p.add_argument("--num_layers", type=int, default=12)
@@ -72,6 +78,7 @@ def main():
             input_bus_dim=x["bus"].shape[-1], input_gen_dim=x["gen"].shape[-1],
             edge_dim=ea[("bus", "connects", "bus")].shape[-1],
             hidden_size=a.hidden_size, heads=a.n_heads, num_layers=a.num_layers,
+            pin_known=(a.impl == "mirrorpin"),
         ).to(dev)
     model.load_state_dict(torch.load(a.ckpt, map_location=dev))
     model.eval()

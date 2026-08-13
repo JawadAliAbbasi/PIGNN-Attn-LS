@@ -7,9 +7,9 @@
 \usepackage{float}
 
 \title{GridFM as an AC power-flow surrogate\\
-\large 31 PPC grids, one model per grid}
+\large 31 PPC grids, three implementations, one model per grid}
 \author{PIGNN-Attn-LS-PPC experimental summary}
-\date{11 August 2026}
+\date{13 August 2026}
 
 \begin{document}
 \maketitle
@@ -20,15 +20,34 @@ One AC power-flow surrogate trained per grid across the Phase-0 backbone corpus:
 given the bus injections, predict the voltage state. This is the power-flow task
 (\texttt{-{}-task pf}), not OPF --- no decision space, no dispatch, no cost.
 
-\paragraph{Which GridFM this is.} The model here is
-\texttt{GridFMHeteroSurrogate}, a local re-implementation in GridFM's
-architectural style, not IBM's released \texttt{gridfm\_graphkit} model. Nothing
-imports the released model and no checkpoint is loaded, so every run is from
-scratch. The released \texttt{GNS\_heterogeneous} adds per-layer physics
-feedback and a \texttt{PhysicsDecoderPF} that recovers the quantities the
-balance equations determine; a matched run of that model is in progress and is
-not reported here. \textbf{Do not read these numbers as ``GridFM's''
-performance} --- they are this mirror's.
+\paragraph{Three campaigns.} All 31 grids were trained three times, once per
+implementation, 93 runs in total and all 93 finished:
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{llll}
+\toprule
+Tag & Model & $|V|$ at PV/slack, $\theta$ at slack & Status \\
+\midrule
+\texttt{mirror}    & \texttt{GridFMHeteroSurrogate} (local) & predicted & 31/31 \\
+\texttt{mirrorpin} & the same, \texttt{-{}-pin\_known}      & held to the given input & 31/31 \\
+\texttt{graphkit}  & IBM \texttt{GNS\_heterogeneous}        & held to the given input & 31/31 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\texttt{mirror} is a local re-implementation in GridFM's architectural style,
+not IBM's released model. The released \texttt{GNS\_heterogeneous} adds
+per-layer physics feedback and a \texttt{PhysicsDecoderPF}. Neither has
+published weights, so all 93 runs are from scratch and none is fine-tuned;
+this compares architectures, not pretraining. \textbf{Do not read the
+\texttt{mirror} numbers as ``GridFM's'' performance.}
+
+\texttt{mirrorpin} exists because \texttt{mirror} was found to violate the
+problem statement --- see Section~\ref{sec:graphkit}. It is the variant to use
+for new work; \texttt{mirror} is retained so the first campaign stays
+reproducible.
 
 \paragraph{Data.} The Phase-0 backbone corpus: the pandapower-solved scenario
 set tagged \texttt{\_ppNR\_}, plus LVN\_heo1, which carries \texttt{\_cNR\_}
@@ -85,47 +104,99 @@ everything up to case1354pegase).
 \begin{table}[H]
 \centering
 \small
-\begin{tabular}{lrrrrr}
+\begin{tabular}{lrrrrrrr}
 \toprule
-Grid & Buses & RMSE & $|V|$ RMSE & $\theta$ [deg] & batch \\
+ & & \multicolumn{3}{c}{combined RMSE} & \multicolumn{3}{c}{$|V|$ RMSE [pu]} \\
+\cmidrule(lr){3-5}\cmidrule(lr){6-8}
+Grid & Buses & mirror & mirrorpin & graphkit & mirror & mirrorpin & graphkit \\
 \midrule
-SimBench & 94 & 1.203e-03 & 1.05e-03 & 0.034 & 64 \\
-case4gs & 4 & 2.367e-03 & 1.69e-03 & 0.095 & 64 \\
-case5 & 5 & 3.666e-03 & 2.61e-03 & 0.148 & 64 \\
-case6ww & 6 & 4.948e-03 & 1.56e-03 & 0.269 & 64 \\
-case30 & 30 & 5.545e-03 & 2.41e-03 & 0.286 & 64 \\
-case14 & 14 & 5.829e-03 & 2.50e-03 & 0.302 & 64 \\
-case\_ieee30 & 30 & 7.684e-03 & 4.53e-03 & 0.356 & 64 \\
-case9 & 9 & 8.907e-03 & 3.83e-03 & 0.461 & 64 \\
-case24\_ieee\_rts & 24 & 9.392e-03 & 2.06e-03 & 0.525 & 64 \\
-case\_illinois200 & 200 & 1.074e-02 & 6.62e-03 & 0.484 & 64 \\
-case33bw & 33 & 1.138e-02 & 1.10e-02 & 0.170 & 64 \\
-case118 & 118 & 1.144e-02 & 2.94e-03 & 0.633 & 64 \\
-case57 & 57 & 1.177e-02 & 8.65e-03 & 0.457 & 64 \\
-case39 & 39 & 1.511e-02 & 6.96e-03 & 0.768 & 64 \\
-case6495rte & 6495 & 2.603e-02 & 1.77e-02 & 1.094 & 18 \\
-LVN\_heo1 & 722 & 2.756e-02 & 2.74e-02 & 0.187 & 64 \\
-GBnetwork & 2224 & 3.156e-02 & 2.26e-02 & 1.263 & 53 \\
-GBreducednetwork & 29 & 3.188e-02 & 2.29e-02 & 1.271 & 64 \\
-case89pegase & 89 & 3.374e-02 & 2.73e-02 & 1.139 & 64 \\
-iceland & 189 & 3.606e-02 & 1.71e-02 & 1.820 & 64 \\
-case2848rte & 2848 & 3.720e-02 & 2.61e-02 & 1.519 & 42 \\
-case6515rte & 6515 & 4.151e-02 & 2.25e-02 & 1.997 & 18 \\
-case300 & 300 & 4.835e-02 & 1.15e-02 & 2.691 & 64 \\
-case1354pegase & 1354 & 5.199e-02 & 2.41e-02 & 2.638 & 64 \\
-case6470rte & 6470 & 6.105e-02 & 2.17e-02 & 3.270 & 18 \\
-case1888rte & 1888 & 6.878e-02 & 3.06e-02 & 3.529 & 63 \\
-case2869pegase & 2869 & 7.219e-02 & 2.52e-02 & 3.876 & 41 \\
-case3120sp & 3120 & 1.127e-01 & 2.84e-02 & 6.246 & 38 \\
-case9241pegase & 9241 & 1.227e-01 & 2.76e-02 & 6.849 & 12 \\
-case145 & 145 & 2.060e-01 & 2.76e-02 & 11.695 & 64 \\
+SimBench & 94 & \textbf{1.203e-03} & 1.491e-03 & 3.885e-03 & 1.048e-03 & 1.319e-03 & 1.584e-03 \\
+case6ww & 6 & 4.948e-03 & 2.517e-03 & \textbf{1.661e-03} & 1.559e-03 & 1.416e-03 & 4.757e-04 \\
+case4gs & 4 & 2.367e-03 & 2.628e-03 & \textbf{5.647e-04} & 1.695e-03 & 7.049e-04 & 2.857e-04 \\
+case5 & 5 & 3.666e-03 & 2.742e-03 & \textbf{6.346e-04} & 2.608e-03 & 4.824e-04 & 6.459e-05 \\
+case14 & 14 & 5.829e-03 & 5.498e-03 & \textbf{3.355e-03} & 2.499e-03 & 1.834e-03 & 8.409e-04 \\
+case30 & 30 & \textbf{5.545e-03} & 6.071e-03 & 7.044e-03 & 2.410e-03 & 1.776e-03 & 1.753e-03 \\
+case9 & 9 & 8.907e-03 & 6.281e-03 & \textbf{2.787e-03} & 3.833e-03 & 1.985e-03 & 8.752e-04 \\
+case\_ieee30 & 30 & 7.684e-03 & \textbf{7.169e-03} & 7.405e-03 & 4.530e-03 & 3.307e-03 & 4.270e-03 \\
+ENTSO\_E\_RealGridTest & 6051 & \textbf{8.184e-03} & 9.028e-03 & 8.013e-02 & 2.635e-03 & 2.544e-03 & 2.427e-02 \\
+case\_illinois200 & 200 & 1.074e-02 & \textbf{9.497e-03} & 1.720e-02 & 6.625e-03 & 5.641e-03 & 7.814e-03 \\
+case24\_ieee\_rts & 24 & \textbf{9.392e-03} & 9.715e-03 & 1.110e-02 & 2.055e-03 & 1.803e-03 & 1.677e-03 \\
+case33bw & 33 & 1.138e-02 & 1.125e-02 & \textbf{9.760e-03} & 1.099e-02 & 1.100e-02 & 9.452e-03 \\
+case118 & 118 & 1.144e-02 & \textbf{1.126e-02} & 1.323e-02 & 2.941e-03 & 1.931e-03 & 1.320e-03 \\
+case57 & 57 & 1.177e-02 & \textbf{1.157e-02} & 1.215e-02 & 8.646e-03 & 7.481e-03 & 6.306e-03 \\
+case39 & 39 & \textbf{1.511e-02} & 1.612e-02 & 1.896e-02 & 6.957e-03 & 6.802e-03 & 9.046e-03 \\
+LVN\_heo1 & 722 & 2.756e-02 & \textbf{2.254e-02} & 3.434e-02 & 2.737e-02 & 2.227e-02 & 2.229e-02 \\
+case6495rte & 6495 & 2.603e-02 & \textbf{2.387e-02} & 8.418e-02 & 1.768e-02 & 1.523e-02 & 4.113e-02 \\
+GBreducednetwork & 29 & 3.188e-02 & \textbf{2.395e-02} & 3.574e-02 & 2.289e-02 & 5.092e-03 & 5.086e-04 \\
+case89pegase & 89 & 3.374e-02 & 2.666e-02 & \textbf{2.371e-02} & 2.726e-02 & 1.904e-02 & 1.285e-02 \\
+iceland & 189 & 3.606e-02 & \textbf{3.290e-02} & 4.011e-02 & 1.709e-02 & 1.421e-02 & 1.586e-02 \\
+GBnetwork & 2224 & \textbf{3.156e-02} & 3.591e-02 & 8.726e-02 & 2.259e-02 & 2.870e-02 & 3.354e-02 \\
+case2848rte & 2848 & \textbf{3.720e-02} & 3.917e-02 & 7.909e-02 & 2.609e-02 & 2.491e-02 & 3.176e-02 \\
+case6515rte & 6515 & \textbf{4.151e-02} & 4.276e-02 & 1.513e-01 & 2.254e-02 & 1.597e-02 & 5.325e-02 \\
+case300 & 300 & \textbf{4.835e-02} & 5.205e-02 & 8.564e-02 & 1.149e-02 & 1.147e-02 & 2.343e-02 \\
+case1888rte & 1888 & 6.878e-02 & \textbf{5.662e-02} & 1.839e-01 & 3.060e-02 & 2.457e-02 & 2.887e-02 \\
+case1354pegase & 1354 & \textbf{5.199e-02} & 5.700e-02 & 1.084e-01 & 2.414e-02 & 1.866e-02 & 2.324e-02 \\
+case6470rte & 6470 & \textbf{6.105e-02} & 6.153e-02 & 1.769e-01 & 2.166e-02 & 1.964e-02 & 5.231e-02 \\
+case2869pegase & 2869 & 7.219e-02 & \textbf{6.244e-02} & 2.007e-01 & 2.521e-02 & 2.044e-02 & 2.860e-02 \\
+case3120sp & 3120 & 1.127e-01 & \textbf{9.761e-02} & 1.462e-01 & 2.843e-02 & 2.088e-02 & 2.771e-02 \\
+case9241pegase & 9241 & \textbf{1.227e-01} & 1.257e-01 & 2.793e-01 & 2.764e-02 & 2.596e-02 & 7.089e-02 \\
+case145 & 145 & \textbf{2.060e-01} & 2.175e-01 & 4.116e-01 & 2.761e-02 & 2.305e-02 & 1.666e-01 \\
 \bottomrule
 \end{tabular}
-\caption{Final test-set voltage error, sorted by RMSE. ENTSO\_E\_RealGridTest
-had not finished at the time of writing and is omitted. RMSE combines magnitude
-and angle; the two are also given separately because they behave very
-differently.}
+\caption{Final test-set voltage error for all 31 grids under all three
+implementations, sorted by \texttt{mirrorpin} RMSE; the best combined RMSE per
+grid is bold. ENTSO\_E\_RealGridTest, omitted from the previous revision as
+unfinished, is included. RMSE combines magnitude and angle.}
 \end{table}
+
+\paragraph{No implementation wins outright.} On combined RMSE the split is
+mirror 13, mirrorpin 11, graphkit 7 --- but that headline hides that the three
+disagree about \emph{which channel} they are good at:
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{lrrr}
+\toprule
+Grids won (of 31) & mirror & mirrorpin & graphkit \\
+\midrule
+combined RMSE   & 13 & 11 & 7 \\
+$|V|$ RMSE      &  2 & \textbf{17} & 12 \\
+$\theta$ RMSE   & \textbf{16} &  9 & 6 \\
+$\Delta P^{\infty}$ &  6 &  6 & \textbf{19} \\
+$\Delta Q^{\infty}$ &  9 &  0 & \textbf{22} \\
+\bottomrule
+\end{tabular}
+\caption{Each metric picks a different winner. A single-number comparison of
+these three implementations would be an artefact of which metric was chosen.}
+\end{table}
+
+\paragraph{Pinning does what it was meant to, and only that.} \texttt{mirrorpin}
+improves $|V|$ on \textbf{28 of 31} grids, median ratio $0.83$, which is the
+predicted consequence of no longer moving away from values it was handed. The
+gain is concentrated where the pinned fraction is large: GBreducednetwork
+$2.29\times10^{-2}\rightarrow5.09\times10^{-3}$ ($4.5\times$) and case5
+$2.61\times10^{-3}\rightarrow4.82\times10^{-4}$ ($5.4\times$).
+
+But combined RMSE improves on only 17 of 31 (median ratio $0.985$), because the
+angle gets slightly \emph{worse} more often than not --- mirror wins the angle
+on 16 grids to mirrorpin's 9. Pinning removes an error source at PV and slack
+buses and does not touch the angle at PQ buses, so this is not a mechanical
+consequence of the change; the most likely reading is that freeing the head from
+having to fit the pinned magnitudes shifts capacity around, and a single seed
+per grid cannot separate that from run-to-run noise. \textbf{The honest
+statement is that pinning is a clear win on magnitude and neutral-to-slightly-negative
+on angle.}
+
+\paragraph{The released model is behind on voltage.} graphkit loses to
+mirrorpin on combined RMSE on 24 of 31 grids, median ratio $1.50$, and the
+losses are worst on the large rte/pegase grids --- case6470rte
+$6.15\times10^{-2}\rightarrow1.77\times10^{-1}$, case2869pegase
+$6.24\times10^{-2}\rightarrow2.01\times10^{-1}$, ENTSO\_E\_RealGridTest
+$9.03\times10^{-3}\rightarrow8.01\times10^{-2}$ (a factor of 8.9). It wins
+clearly on the smallest grids (case4gs, case5, case6ww, case9, case14), where
+most buses are pinned. Section~\ref{sec:graphkit} separates how much of that is
+the masking rather than the architecture.
 
 \section{Results: power-balance residuals}
 
@@ -176,15 +247,47 @@ GBreducednetwork & 47.2 & 27.4 & 5.08 & 12.4 & 26.5 & 35 \\
 iceland & 746 & 97.8 & 8.18 & 0.795 & 0.899 & 0.53 \\
 \bottomrule
 \end{tabular}
-\caption{All quantities in pu on a 100~MVA base, so $10^{-2}$~pu $=$ 1~MW/MVAr.
-Sorted by $\overline{|\Delta P|}$.}
+\caption{\texttt{mirror} campaign. All quantities in pu on a 100~MVA base, so
+$10^{-2}$~pu $=$ 1~MW/MVAr. Sorted by $\overline{|\Delta P|}$. The per-bus
+breakdown is only available for \texttt{mirror}; the cross-campaign comparison
+below uses the $\Delta P^{\infty}$/$\Delta Q^{\infty}$ figures logged by every
+run.}
 \end{table}
+
+\paragraph{The residual ranking reverses the voltage ranking.} graphkit is the
+worst of the three on voltage and the best of the three on residual, by a wide
+margin: median $\Delta P^{\infty}$ 1.43~pu against mirror's 5.52 and
+mirrorpin's 7.77, and it wins $\Delta P^{\infty}$ on 19 of 31 grids and
+$\Delta Q^{\infty}$ on 22 of 31. This is the clearest single result in the
+report. The released model carries a \texttt{PhysicsDecoderPF} and per-layer
+physics feedback, and the residual is exactly the quantity that machinery
+targets --- so the architecture is doing what it was designed to do, at a cost
+in state accuracy. Which of the two matters depends on the application, and
+reporting either metric alone would have declared a different winner.
+
+\paragraph{Pinning helps the voltage and hurts the reactive balance.}
+\texttt{mirrorpin} is worse than \texttt{mirror} on $\Delta Q^{\infty}$ on
+\textbf{22 of 31} grids and better on \emph{none} --- it wins 0 of 31 --- while
+simultaneously improving $|V|$ on 28 of 31. The regressions are large:
+LVN\_heo1 $23.4\rightarrow8417$~pu ($360\times$), case9241pegase
+$53.5\rightarrow432$ ($8.1\times$), case2869pegase $17.7\rightarrow135$
+($7.6\times$).
+
+A plausible mechanism is that the unpinned model was using the PV-bus magnitudes
+it was free to move as slack to absorb reactive mismatch, and pinning removes
+that freedom without giving the model a better way to satisfy the balance.
+\textbf{This is a hypothesis, not a measurement:} it predicts the effect should
+scale with the pinned fraction, and LVN\_heo1 --- 99\% PQ, so almost nothing is
+pinned --- is the worst regression of all, which the hypothesis does not
+explain. LVN\_heo1's $\Delta Q^{\infty}$ of 8417~pu is also physically absurd
+as a modelling error and is more likely a degenerate bus. Both need
+investigation before the effect is described as understood.
 
 \section{Findings}
 
 \paragraph{The residual ranking is not the voltage ranking.} Spearman
-correlation between RMSE and $\overline{|\Delta P|}$ is 0.78 over the 30 finished
-grids --- strong but far from the identity a single-metric summary would imply.
+correlation between RMSE and $\overline{|\Delta P|}$ is 0.78 over the 30 grids
+in the mirror residual table --- strong but far from the identity a single-metric summary would imply.
 The disagreements are large and systematic:
 
 \begin{table}[H]
@@ -208,7 +311,7 @@ mismatch, and the reverse.}
 \end{table}
 
 The practical consequence: \textbf{reporting voltage RMSE alone would have rated
-iceland (rank 20 of 30) as mid-pack when it has the worst mean active-power
+iceland (rank 20 of 30 in that table) as mid-pack when it has the worst mean active-power
 residual in the corpus}, and would have understated LVN\_heo1, which is 16th on
 voltage but 6th on residual.
 
@@ -383,7 +486,10 @@ away from it. The slack angle is the reference and should be exact.}
 A \texttt{-{}-pin\_known} flag now holds these quantities to their inputs; a
 verification run confirms the shift becomes exactly 0.000e+00 at PV/slack while
 the PQ buses keep their full freedom. It is off by default so the campaign above
-stays reproducible, and a separate pinned campaign is training.
+stays reproducible. The pinned campaign has since completed on all 31 grids and
+is the \texttt{mirrorpin} column throughout this report; its effect is a clear
+improvement on magnitude, no improvement on angle, and a consistent degradation
+of the reactive residual (Section~4).
 
 \paragraph{Consequence for the comparison.} Pooled $|V|$ error is not
 like-for-like: the released model is exact by construction at the buses it pins,
@@ -441,6 +547,42 @@ physics decoder does not fix it, and on GBnetwork and case2848rte the released
 model is \emph{worse}. LVN\_heo1 is the one clear reversal, where it more than
 doubles the tracked spread (0.213 $\rightarrow$ 0.503).
 
+\paragraph{The masking hypothesis, now tested.} The paragraph above proposed
+that much of the released model's $|V|$ advantage was the pinning rather than
+the architecture. \texttt{mirrorpin} pins the same quantities in the same
+places, so the comparison is now controlled, and the prediction holds:
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{lrrr}
+\toprule
+Grid & PQ & mirror\,/\,graphkit & mirrorpin\,/\,graphkit \\
+\midrule
+case5       & 20\% & $40.4\times$ & $7.5\times$ \\
+case4gs     & 50\% & $5.9\times$  & $2.5\times$ \\
+case9       & 67\% & $4.4\times$  & $2.3\times$ \\
+case14      & 64\% & $3.0\times$  & $2.2\times$ \\
+case118     & 54\% & $2.2\times$  & $1.5\times$ \\
+\midrule
+SimBench    & 97\% & $0.7\times$  & $0.8\times$ \\
+LVN\_heo1   & 99\% & $1.2\times$  & $1.0\times$ \\
+\bottomrule
+\end{tabular}
+\caption{Ratio of $|V|$ RMSE to graphkit's; above 1 means graphkit is better.
+The gap closes on exactly the grids where pinning applies to many buses, and
+does not move on the grids that are almost all PQ.}
+\end{table}
+
+Across all 31 grids the median $|V|$ ratio to graphkit falls from $1.06$
+(mirror) to $0.85$ (mirrorpin), and graphkit's win count drops from 18 of 31 to
+12 of 31. \textbf{Once the mirror respects the same boundary conditions, the
+released model no longer has a magnitude advantage at all.} Pinning does not
+explain the whole gap on the smallest grids --- case5 remains $7.5\times$ --- so
+some architectural difference survives, but the headline advantage was
+substantially an artefact of comparing two models that were solving different
+problems.
+
 Restricted to PQ buses the released model's slope falls further still: 0.228 on
 case1888rte, 0.337 on case2848rte and 0.352 on case1354pegase. The pinned
 buses, trivially perfect, had been propping the pooled figure up.
@@ -458,10 +600,34 @@ should be re-run before its number is used for anything.
 case300 27{,}994, case1354pegase 32{,}627, GBnetwork 34{,}424, iceland 35{,}605.
 Cross-grid comparisons carry this confound.
 
-\paragraph{Coverage.} The mirror campaign is complete (31/31) and 30 of 31 are
-re-scored. The released-model campaign is 30/31 trained with 19 re-scored, so
-Section~\ref{sec:graphkit} compares the 19 grids both have. A third campaign,
-the mirror with \texttt{-{}-pin\_known}, is training.
+\paragraph{Coverage: training complete, re-scoring is not.} All three campaigns
+are 31/31 trained, so every number taken from a training log --- Sections 3
+and 4, and the three-way comparisons --- covers the full corpus.
+
+The re-scored diagnostics do not. Slope, $R^2$ and the PQ-restricted columns
+come from a separate inference pass over the saved checkpoints. The tables as
+printed cover 27 grids for mirror (Section~\ref{sec:diag}) and the 19 grids
+scored under both implementations (Section~\ref{sec:graphkit});
+\textbf{mirrorpin is not re-scored at all}. Sections~\ref{sec:diag}
+and~\ref{sec:graphkit} are therefore a two-implementation comparison on a
+subset, and every statement about collapse slopes covers mirror and graphkit
+only. The grids missing throughout are the four largest --- case6470rte,
+case6495rte, case6515rte, case9241pegase. Further re-scores have completed since
+these tables were built and are not yet folded in.
+
+\textbf{Consequence: it is not yet known whether pinning changes the collapse.}
+The magnitude channel collapses on half the corpus and pinning changes exactly
+that channel, so this is the most interesting open question in the report, and
+it is unanswered. The mirrorpin re-scoring is dispatched and running.
+
+\paragraph{Single seed.} Every number here is one run. The same configuration
+has given $1.040\times10^{-3}$ and $4.300\times10^{-3}$ on case14 across
+clusters, and two GridSFM scratch runs swapped rank between clusters, so
+differences below roughly a factor of two between implementations should not be
+read as real. This matters most for the mirror-vs-mirrorpin comparison, where
+the median combined-RMSE ratio is $0.985$ --- far inside the noise. The
+\texttt{SEEDS} knob in the dispatcher implements the three-seed protocol PFDelta
+uses; it has not been run.
 
 \paragraph{No pretrained baseline exists.} \texttt{gridfm\_graphkit} ships no
 weights, so GridFM is scratch-only under either implementation. Unlike LUMINA
