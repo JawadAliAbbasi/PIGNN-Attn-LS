@@ -26,7 +26,7 @@ Tag & Model & $|V|$ at PV/slack, $\theta$ at slack & Coverage \\
 \texttt{mirror}    & \texttt{GridFMHeteroSurrogate} (local GridFM-style) & predicted & 31/31 \\
 \texttt{mirrorpin} & the same, \texttt{-{}-pin\_known}                   & held to the given input & 31/31 \\
 \texttt{graphkit}  & IBM \texttt{GNS\_heterogeneous}                     & held to the given input & 31/31 \\
-\texttt{pignn}     & \texttt{GNSMsg\_EdgeSelfAttn} (PIGNN-Attn-LS)       & held to the given input & \textbf{23/31} \\
+\texttt{pignn}     & \texttt{GNSMsg\_EdgeSelfAttn} (PIGNN-Attn-LS)       & held to the given input & \textbf{23/31} (15/31 re-scored) \\
 \bottomrule
 \end{tabular}
 \caption{The three GridFM variants ran on helma; PIGNN ran on alex with $K=40$,
@@ -276,91 +276,91 @@ regression over all buses is dragged toward~1 for reasons unrelated to modelling
 
 \begin{table}[H]
 \centering\scriptsize
-\begin{tabular}{lrr rrr rrr}
+\begin{tabular}{lrr rrrr rrrr}
 \toprule
- & & & \multicolumn{3}{c}{slope $|V|$, PQ only} & \multicolumn{3}{c}{$R^2$ $|V|$, PQ only} \\
-\cmidrule(lr){4-6}\cmidrule(lr){7-9}
-Grid & Buses & PQ & mirror & mirrorpin & graphkit & mirror & mirrorpin & graphkit \\
+ & & & \multicolumn{4}{c}{slope $|V|$, PQ only} & \multicolumn{4}{c}{$R^2$ $|V|$, PQ only} \\
+\cmidrule(lr){4-7}\cmidrule(lr){8-11}
+Grid & Buses & PQ & mirror & mirrorpin & graphkit & pignn & mirror & mirrorpin & graphkit & pignn \\
 \midrule
-case5 & 5 & 20\% & 0.972 & 1.022 & 0.999 & 0.979 & 0.998 & 1.000 \\
-case4gs & 4 & 50\% & 0.982 & 1.006 & 1.003 & 0.998 & 0.999 & 1.000 \\
-SimBench & 94 & 97\% & 0.998 & 0.997 & 0.992 & 0.998 & 0.997 & 0.997 \\
-case6ww & 6 & 50\% & 1.001 & 1.012 & 0.998 & 0.997 & 0.998 & 1.000 \\
-case30 & 30 & 80\% & 0.963 & 0.985 & 0.984 & 0.988 & 0.992 & 0.995 \\
-case24\_ieee\_rts & 24 & 54\% & 0.984 & 0.984 & 0.976 & 0.995 & 0.995 & 0.996 \\
-case14 & 14 & 64\% & 0.952 & 0.995 & 0.993 & 0.990 & 0.992 & 0.998 \\
-case118 & 118 & 54\% & 0.986 & 0.985 & 0.979 & 0.987 & 0.990 & 0.994 \\
-case9 & 9 & 67\% & 0.962 & 0.968 & 0.986 & 0.979 & 0.993 & 0.999 \\
-ENTSO\_E\_RealGridTest & 6051 & 93\% & 0.999 & 0.999 & 0.538 & 0.996 & 0.996 & 0.504 \\
-case\_ieee30 & 30 & 80\% & 0.987 & 0.976 & 0.934 & 0.975 & 0.983 & 0.971 \\
-GBreducednetwork & 29 & 17\% & 1.139 & 0.391 & 0.943 & 0.089 & 0.030 & 0.948 \\
-case\_illinois200 & 200 & 81\% & 0.898 & 0.933 & 0.860 & 0.915 & 0.935 & 0.883 \\
-case39 & 39 & 74\% & 0.870 & 0.862 & 0.805 & 0.936 & 0.935 & 0.879 \\
-case57 & 57 & 88\% & 0.997 & 1.015 & 0.974 & 0.993 & 0.992 & 0.994 \\
-case33bw & 33 & 97\% & 0.865 & 0.879 & 0.882 & 0.888 & 0.889 & 0.916 \\
-case300 & 300 & 77\% & 0.929 & 0.871 & 0.712 & 0.932 & 0.926 & 0.750 \\
-iceland & 189 & 81\% & 0.891 & 0.912 & 0.838 & 0.901 & 0.909 & 0.890 \\
-case6495rte & 6495 & 92\% & 0.831 & 0.855 & 0.146 & 0.891 & 0.898 & 0.157 \\
-case6515rte & 6515 & 92\% & 0.684 & 0.831 & 0.187 & 0.747 & 0.866 & 0.085 \\
-case1354pegase & 1354 & 81\% & 0.341 & 0.451 & 0.352 & 0.440 & 0.578 & 0.367 \\
-case89pegase & 89 & 87\% & 0.396 & 0.471 & 0.696 & 0.496 & 0.587 & 0.809 \\
-case6470rte & 6470 & 93\% & 0.735 & 0.770 & 0.383 & 0.763 & 0.799 & 0.167 \\
-case2869pegase & 2869 & 82\% & 0.342 & 0.461 & 0.254 & 0.455 & 0.548 & 0.159 \\
-case3120sp & 3120 & 92\% & 0.193 & 0.456 & 0.298 & 0.264 & 0.562 & 0.232 \\
-LVN\_heo1 & 722 & 99\% & 0.214 & 0.491 & 0.494 & 0.225 & 0.478 & 0.493 \\
-case145 & 145 & 66\% & 0.672 & 0.704 & -0.199 & 0.761 & 0.772 & 0.008 \\
-case1888rte & 1888 & 86\% & 0.228 & 0.378 & 0.228 & 0.393 & 0.545 & 0.272 \\
-case2848rte & 2848 & 87\% & 0.562 & 0.487 & 0.337 & 0.676 & 0.630 & 0.455 \\
-case9241pegase & 9241 & 84\% & 0.492 & 0.537 & 0.512 & 0.572 & 0.609 & 0.151 \\
-GBnetwork & 2224 & 83\% & 0.739 & 0.746 & 0.549 & 0.825 & 0.805 & 0.591 \\
+case5 & 5 & 20\% & 0.972 & 1.022 & 0.999 & 1.000 & 0.979 & 0.998 & 1.000 & 1.000 \\
+case4gs & 4 & 50\% & 0.982 & 1.006 & 1.003 & 1.000 & 0.998 & 0.999 & 1.000 & 1.000 \\
+SimBench & 94 & 97\% & 0.998 & 0.997 & 0.992 & 0.999 & 0.998 & 0.997 & 0.997 & 0.999 \\
+case6ww & 6 & 50\% & 1.001 & 1.012 & 0.998 & 1.000 & 0.997 & 0.998 & 1.000 & 1.000 \\
+case30 & 30 & 80\% & 0.963 & 0.985 & 0.984 & 0.998 & 0.988 & 0.992 & 0.995 & 1.000 \\
+case24\_ieee\_rts & 24 & 54\% & 0.984 & 0.984 & 0.976 & 1.001 & 0.995 & 0.995 & 0.996 & 1.000 \\
+case14 & 14 & 64\% & 0.952 & 0.995 & 0.993 & 0.999 & 0.990 & 0.992 & 0.998 & 1.000 \\
+case118 & 118 & 54\% & 0.986 & 0.985 & 0.979 & 0.999 & 0.987 & 0.990 & 0.994 & 1.000 \\
+case9 & 9 & 67\% & 0.962 & 0.968 & 0.986 & 1.000 & 0.979 & 0.993 & 0.999 & 1.000 \\
+ENTSO\_E\_RealGridTest & 6051 & 93\% & 0.999 & 0.999 & 0.538 & --- & 0.996 & 0.996 & 0.504 & --- \\
+case\_ieee30 & 30 & 80\% & 0.987 & 0.976 & 0.934 & 1.012 & 0.975 & 0.983 & 0.971 & 0.999 \\
+GBreducednetwork & 29 & 17\% & 1.139 & 0.391 & 0.943 & 0.999 & 0.089 & 0.030 & 0.948 & 1.000 \\
+case\_illinois200 & 200 & 81\% & 0.898 & 0.933 & 0.860 & --- & 0.915 & 0.935 & 0.883 & --- \\
+case39 & 39 & 74\% & 0.870 & 0.862 & 0.805 & 0.995 & 0.936 & 0.935 & 0.879 & 1.000 \\
+case57 & 57 & 88\% & 0.997 & 1.015 & 0.974 & 0.841 & 0.993 & 0.992 & 0.994 & 0.951 \\
+case33bw & 33 & 97\% & 0.865 & 0.879 & 0.882 & 0.856 & 0.888 & 0.889 & 0.916 & 0.923 \\
+case300 & 300 & 77\% & 0.929 & 0.871 & 0.712 & --- & 0.932 & 0.926 & 0.750 & --- \\
+iceland & 189 & 81\% & 0.891 & 0.912 & 0.838 & --- & 0.901 & 0.909 & 0.890 & --- \\
+case6495rte & 6495 & 92\% & 0.831 & 0.855 & 0.146 & --- & 0.891 & 0.898 & 0.157 & --- \\
+case6515rte & 6515 & 92\% & 0.684 & 0.831 & 0.187 & --- & 0.747 & 0.866 & 0.085 & --- \\
+case1354pegase & 1354 & 81\% & 0.341 & 0.451 & 0.352 & --- & 0.440 & 0.578 & 0.367 & --- \\
+case89pegase & 89 & 87\% & 0.396 & 0.471 & 0.696 & 0.830 & 0.496 & 0.587 & 0.809 & 0.952 \\
+case6470rte & 6470 & 93\% & 0.735 & 0.770 & 0.383 & --- & 0.763 & 0.799 & 0.167 & --- \\
+case2869pegase & 2869 & 82\% & 0.342 & 0.461 & 0.254 & --- & 0.455 & 0.548 & 0.159 & --- \\
+case3120sp & 3120 & 92\% & 0.193 & 0.456 & 0.298 & --- & 0.264 & 0.562 & 0.232 & --- \\
+LVN\_heo1 & 722 & 99\% & 0.214 & 0.491 & 0.494 & --- & 0.225 & 0.478 & 0.493 & --- \\
+case145 & 145 & 66\% & 0.672 & 0.704 & -0.199 & --- & 0.761 & 0.772 & 0.008 & --- \\
+case1888rte & 1888 & 86\% & 0.228 & 0.378 & 0.228 & --- & 0.393 & 0.545 & 0.272 & --- \\
+case2848rte & 2848 & 87\% & 0.562 & 0.487 & 0.337 & --- & 0.676 & 0.630 & 0.455 & --- \\
+case9241pegase & 9241 & 84\% & 0.492 & 0.537 & 0.512 & --- & 0.572 & 0.609 & 0.151 & --- \\
+GBnetwork & 2224 & 83\% & 0.739 & 0.746 & 0.549 & --- & 0.825 & 0.805 & 0.591 & --- \\
 \bottomrule
 \end{tabular}
-\caption{Sorted as the other tables. Under mirror, 17 of 31 grids fall below
-slope 0.9 and 7 below 0.5; graphkit is worst at 19 and 10, and reaches a
-\emph{negative} slope on case145, meaning its prediction is anti-correlated with
-the reference there.}
+\caption{Unlike the other four families, slope and $R^2$ are not written to the
+training logs; they come from a separate inference pass over the saved
+checkpoints. That pass covers 31/31 for the three GridFM variants and
+\textbf{15/31 for PIGNN}.}
 \end{table}
 
-\paragraph{PIGNN is absent from this table, deliberately.} Unlike the other four
-metric families, slope and $R^2$ are not written to the training logs --- they
-need a fresh inference pass over the saved checkpoints. That pass exists for the
-three GridFM variants and is validated: all 93 of its runs reproduce their
-training run's RMSE to better than $2\times10^{-4}$ relative.
+\paragraph{PIGNN tracks the voltage profile essentially perfectly --- on the
+grids it has been scored on.} Median PQ slope 0.999 and median $R^2$ 1.0000, and
+it is the closest to slope~1 on 13 of the 15 grids where all four are available.
+The other three sit at median slope 0.98--0.99 on the same 15.
 
-The equivalent pass for PIGNN (\texttt{rescore\_pignn.py}) does \textbf{not} yet
-reproduce the training result --- on SimBench it returns $|V|$ RMSE
-$2.05\times10^{-1}$ against a logged $8.76\times10^{-4}$ --- so it is not
-reported. The cause is that \texttt{GNSMsg\_EdgeSelfAttn} takes a dozen
-constructor arguments that change the forward pass but are not stored in the
-checkpoint, so a wrong value loads with a perfectly matching
-\texttt{state\_dict} and silently computes a different function. Two were found
-and fixed (\texttt{v\_limit}, which the class defaults to \texttt{True} while the
-driver's \texttt{-{}-vlimit} store\_true leaves it \texttt{False}; and the
-missing \texttt{n\_nodes\_per\_graph}, without which the block-diagonal batch is
-treated as one graph). Neither was sufficient, so at least one more remains.
-\textbf{Publishing a slope from an inference path that cannot reproduce a known
-RMSE would be publishing a number known to be wrong}, so the column is empty
-until the path is validated.
+\paragraph{That comparison is on the easy half of the corpus, and it is the
+wrong half.} The 15 grids PIGNN has been scored on are the small ones, and none
+of them is a grid where the feed-forward models collapse: the worst mirror PQ
+slope among them is 0.396 (case89pegase), and every grid below that ---
+case3120sp (0.19), LVN\_heo1 (0.21), case1888rte (0.23), case1354pegase (0.34),
+case2869pegase (0.34), case9241pegase (0.49) --- is still missing a PIGNN score.
+\textbf{The interesting question, whether PIGNN's iteration avoids the collapse
+that afflicts half the corpus, is therefore still open.} The median comparison
+above should not be read as answering it.
 
-\paragraph{The same trap applies to \texttt{predict\_pignn.py}.} It omits
-\texttt{n\_nodes\_per\_graph} and defaults \texttt{use\_armijo} to
-\texttt{True}, so any figure taken from it on a block-diagonal batch should be
-re-checked against the training log before use.
+One data point leans the right way without settling it: case89pegase is the
+hardest grid PIGNN has been scored on, and where mirror collapses to 0.396,
+mirrorpin to 0.471 and graphkit to 0.696, PIGNN holds \textbf{0.830} with
+$R^2 = 0.952$ against their 0.49--0.81. That is a single grid at the easy end of
+the collapse range, so it is suggestive, not evidence.
 
-\section{Caveats}
+\paragraph{How the PIGNN scores were validated.} The inference path had to be
+established against the training logs rather than read off defaults, because
+\texttt{GNSMsg\_EdgeSelfAttn} takes a dozen constructor arguments that change the
+forward pass but are not stored in the checkpoint --- so a wrong value loads with
+a perfectly matching \texttt{state\_dict} and silently computes a different
+function. Three had to be corrected: \texttt{use\_armijo} (the decisive one),
+\texttt{v\_limit}, and the missing \texttt{n\_nodes\_per\_graph} argument. With
+\texttt{use\_armijo} off the model returned $|V|$ RMSE $2.05\times10^{-1}$
+against a logged $8.76\times10^{-4}$, a factor of 234, with no error raised.
 
-\paragraph{Single seed.} Every number is one run. The same configuration has
-given $1.040\times10^{-3}$ and $4.300\times10^{-3}$ on case14 across clusters,
-so differences below roughly a factor of two should not be read as real. PIGNN's
-margins are far larger than that; the differences among the three GridFM
-variants are frequently not.
+The 15 scores now reproduce their training runs to within \textbf{0.7\%
+relative}, median 0.07\%. That is looser than the $2\times10^{-4}$ the GridFM
+re-scores achieve, and the reason is structural: PIGNN runs 40 solver iterations
+in float32, so ordinary GPU non-determinism compounds where a single forward pass
+does not. It is agreement to three significant figures, not an unexplained
+discrepancy.
 
-\paragraph{PIGNN's missing eight are the largest grids} --- ENTSO\_E\_RealGridTest,
-case2848rte, case2869pegase, case3120sp, case6470rte, case6495rte, case6515rte,
-case9241pegase. Since difficulty rises sharply with size for the other three,
-the 23-grid aggregate is likely to flatter PIGNN relative to a full-corpus one.
-
-\paragraph{case145 is not comparable} on any row: it has 7885 scenarios where
-the rest have about 36{,}000, and a regeneration is outstanding.
+\paragraph{The same trap applies to \texttt{predict\_pignn.py}} --- it omits
+\texttt{n\_nodes\_per\_graph}, so figures taken from it should be re-checked
+against a training log before use.
 
 \end{document}

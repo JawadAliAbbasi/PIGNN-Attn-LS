@@ -42,15 +42,18 @@ def parse():
     p.add_argument("--n_heads", type=int, default=8)
     p.add_argument("--num_attn_layers", type=int, default=8)
     p.add_argument("--K", type=int, default=40)
-    p.add_argument("--use_armijo", action="store_true")
+    # Armijo backtracking is ON in the campaign checkpoints. It changes the
+    # solver step but not a single parameter, so it is invisible to
+    # load_state_dict: with it off the model loads perfectly and returns |V|
+    # RMSE 2.05e-01 against a logged 8.76e-04. Verified by turning it on --
+    # 8.30e-04 on a 300-scenario subset of the same split.
+    p.add_argument("--no_armijo", dest="use_armijo", action="store_false")
+    p.set_defaults(use_armijo=True)
     # These change the forward pass but are NOT stored in the checkpoint, so a
-    # wrong value loads cleanly and scores a different function. The defaults
-    # below are train_valid_test.py's parser defaults, which are what the
-    # campaign ran with -- deliberately not GNSMsg_EdgeSelfAttn's own class
-    # defaults, which differ: the class defaults v_limit to True while the
-    # driver's --vlimit is a store_true that the dispatcher never sets, and
-    # physics_loss_form to "mse" against the driver's "logcosh". Taking the
-    # class defaults gave |V| RMSE 1.47e-01 against a logged 8.76e-04.
+    # wrong value loads cleanly and scores a different function -- the same trap
+    # as scoring a mirrorpin checkpoint as mirror, but across a dozen arguments.
+    # Every one of them had to be established against a logged RMSE rather than
+    # read off a default.
     #
     # Note the model file on the training cluster is older than this repo's and
     # has no solver_update_mode/preconditioner_* arguments, so this must not
