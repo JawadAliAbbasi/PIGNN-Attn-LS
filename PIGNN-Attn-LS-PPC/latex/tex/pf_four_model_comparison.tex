@@ -26,7 +26,7 @@ Tag & Model & $|V|$ at PV/slack, $\theta$ at slack & Coverage \\
 \texttt{mirror}    & \texttt{GridFMHeteroSurrogate} (local GridFM-style) & predicted & 31/31 \\
 \texttt{mirrorpin} & the same, \texttt{-{}-pin\_known}                   & held to the given input & 31/31 \\
 \texttt{graphkit}  & IBM \texttt{GNS\_heterogeneous}                     & held to the given input & 31/31 \\
-\texttt{pignn}     & \texttt{GNSMsg\_EdgeSelfAttn} (PIGNN-Attn-LS)       & held to the given input & \textbf{23/31} (15/31 re-scored) \\
+\texttt{pignn}     & \texttt{GNSMsg\_EdgeSelfAttn} (PIGNN-Attn-LS)       & held to the given input & \textbf{23/31} \\
 \bottomrule
 \end{tabular}
 \caption{The three GridFM variants ran on helma; PIGNN ran on alex with $K=40$,
@@ -294,53 +294,86 @@ case9 & 9 & 67\% & 0.962 & 0.968 & 0.986 & 1.000 & 0.979 & 0.993 & 0.999 & 1.000
 ENTSO\_E\_RealGridTest & 6051 & 93\% & 0.999 & 0.999 & 0.538 & --- & 0.996 & 0.996 & 0.504 & --- \\
 case\_ieee30 & 30 & 80\% & 0.987 & 0.976 & 0.934 & 1.012 & 0.975 & 0.983 & 0.971 & 0.999 \\
 GBreducednetwork & 29 & 17\% & 1.139 & 0.391 & 0.943 & 0.999 & 0.089 & 0.030 & 0.948 & 1.000 \\
-case\_illinois200 & 200 & 81\% & 0.898 & 0.933 & 0.860 & --- & 0.915 & 0.935 & 0.883 & --- \\
+case\_illinois200 & 200 & 81\% & 0.898 & 0.933 & 0.860 & 0.964 & 0.915 & 0.935 & 0.883 & 0.994 \\
 case39 & 39 & 74\% & 0.870 & 0.862 & 0.805 & 0.995 & 0.936 & 0.935 & 0.879 & 1.000 \\
 case57 & 57 & 88\% & 0.997 & 1.015 & 0.974 & 0.841 & 0.993 & 0.992 & 0.994 & 0.951 \\
 case33bw & 33 & 97\% & 0.865 & 0.879 & 0.882 & 0.856 & 0.888 & 0.889 & 0.916 & 0.923 \\
-case300 & 300 & 77\% & 0.929 & 0.871 & 0.712 & --- & 0.932 & 0.926 & 0.750 & --- \\
-iceland & 189 & 81\% & 0.891 & 0.912 & 0.838 & --- & 0.901 & 0.909 & 0.890 & --- \\
+case300 & 300 & 77\% & 0.929 & 0.871 & 0.712 & 0.677 & 0.932 & 0.926 & 0.750 & 0.721 \\
+iceland & 189 & 81\% & 0.891 & 0.912 & 0.838 & 0.207 & 0.901 & 0.909 & 0.890 & 0.292 \\
 case6495rte & 6495 & 92\% & 0.831 & 0.855 & 0.146 & --- & 0.891 & 0.898 & 0.157 & --- \\
 case6515rte & 6515 & 92\% & 0.684 & 0.831 & 0.187 & --- & 0.747 & 0.866 & 0.085 & --- \\
-case1354pegase & 1354 & 81\% & 0.341 & 0.451 & 0.352 & --- & 0.440 & 0.578 & 0.367 & --- \\
+case1354pegase & 1354 & 81\% & 0.341 & 0.451 & 0.352 & 0.626 & 0.440 & 0.578 & 0.367 & 0.760 \\
 case89pegase & 89 & 87\% & 0.396 & 0.471 & 0.696 & 0.830 & 0.496 & 0.587 & 0.809 & 0.952 \\
 case6470rte & 6470 & 93\% & 0.735 & 0.770 & 0.383 & --- & 0.763 & 0.799 & 0.167 & --- \\
 case2869pegase & 2869 & 82\% & 0.342 & 0.461 & 0.254 & --- & 0.455 & 0.548 & 0.159 & --- \\
 case3120sp & 3120 & 92\% & 0.193 & 0.456 & 0.298 & --- & 0.264 & 0.562 & 0.232 & --- \\
-LVN\_heo1 & 722 & 99\% & 0.214 & 0.491 & 0.494 & --- & 0.225 & 0.478 & 0.493 & --- \\
-case145 & 145 & 66\% & 0.672 & 0.704 & -0.199 & --- & 0.761 & 0.772 & 0.008 & --- \\
-case1888rte & 1888 & 86\% & 0.228 & 0.378 & 0.228 & --- & 0.393 & 0.545 & 0.272 & --- \\
+LVN\_heo1 & 722 & 99\% & 0.214 & 0.491 & 0.494 & 0.000 & 0.225 & 0.478 & 0.493 & 0.000 \\
+case145 & 145 & 66\% & 0.672 & 0.704 & -0.199 & 0.829 & 0.761 & 0.772 & 0.008 & 0.889 \\
+case1888rte & 1888 & 86\% & 0.228 & 0.378 & 0.228 & 0.000 & 0.393 & 0.545 & 0.272 & 0.000 \\
 case2848rte & 2848 & 87\% & 0.562 & 0.487 & 0.337 & --- & 0.676 & 0.630 & 0.455 & --- \\
 case9241pegase & 9241 & 84\% & 0.492 & 0.537 & 0.512 & --- & 0.572 & 0.609 & 0.151 & --- \\
-GBnetwork & 2224 & 83\% & 0.739 & 0.746 & 0.549 & --- & 0.825 & 0.805 & 0.591 & --- \\
+GBnetwork & 2224 & 83\% & 0.739 & 0.746 & 0.549 & 0.000 & 0.825 & 0.805 & 0.591 & 0.000 \\
 \bottomrule
 \end{tabular}
 \caption{Unlike the other four families, slope and $R^2$ are not written to the
 training logs; they come from a separate inference pass over the saved
 checkpoints. That pass covers 31/31 for the three GridFM variants and
-\textbf{15/31 for PIGNN}.}
+\textbf{23/31 for PIGNN}, matching its training coverage.}
 \end{table}
 
-\paragraph{PIGNN tracks the voltage profile essentially perfectly --- on the
-grids it has been scored on.} Median PQ slope 0.999 and median $R^2$ 1.0000, and
-it is the closest to slope~1 on 13 of the 15 grids where all four are available.
-The other three sit at median slope 0.98--0.99 on the same 15.
+\paragraph{On aggregate PIGNN tracks best --- and that hides the more
+interesting result.} Over the 23 grids all four now have, PIGNN has the best
+median PQ slope, 0.995 against mirror 0.952, graphkit 0.934 and mirrorpin 0.933,
+and it is closest to slope~1 on 16 of 23. But the count of \emph{collapsed} grids
+is the same for everyone: slope below 0.9 on 10 of 23 for PIGNN, 10 for mirror,
+10 for mirrorpin, 11 for graphkit; below 0.5 on 4, 4, 5 and 4 respectively.
+\textbf{PIGNN is better on the grids that were already fine and no better at
+avoiding collapse.}
 
-\paragraph{That comparison is on the easy half of the corpus, and it is the
-wrong half.} The 15 grids PIGNN has been scored on are the small ones, and none
-of them is a grid where the feed-forward models collapse: the worst mirror PQ
-slope among them is 0.396 (case89pegase), and every grid below that ---
-case3120sp (0.19), LVN\_heo1 (0.21), case1888rte (0.23), case1354pegase (0.34),
-case2869pegase (0.34), case9241pegase (0.49) --- is still missing a PIGNN score.
-\textbf{The interesting question, whether PIGNN's iteration avoids the collapse
-that afflicts half the corpus, is therefore still open.} The median comparison
-above should not be read as answering it.
+\paragraph{Where the feed-forward models collapse, PIGNN either fixes it or
+fails completely.} The four grids where mirror falls below slope 0.5:
 
-One data point leans the right way without settling it: case89pegase is the
-hardest grid PIGNN has been scored on, and where mirror collapses to 0.396,
-mirrorpin to 0.471 and graphkit to 0.696, PIGNN holds \textbf{0.830} with
-$R^2 = 0.952$ against their 0.49--0.81. That is a single grid at the easy end of
-the collapse range, so it is suggestive, not evidence.
+\begin{table}[H]
+\centering\small
+\begin{tabular}{lrrrr}
+\toprule
+PQ-only $|V|$ slope & mirror & mirrorpin & graphkit & pignn \\
+\midrule
+LVN\_heo1      & 0.214 & 0.491 & 0.494 & \textbf{0.000} \\
+case1888rte    & 0.228 & 0.378 & 0.228 & \textbf{0.000} \\
+case1354pegase & 0.341 & 0.451 & 0.352 & \textbf{0.626} \\
+case89pegase   & 0.396 & 0.471 & 0.696 & \textbf{0.830} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+On two of them PIGNN is the best of the four by a clear margin. On the other two
+its slope is \textbf{exactly zero}: on PQ buses --- the only buses it predicts
+--- it emits a constant. $R^2$ is 0.000 there too, and the predicted standard
+deviation collapses to 7\% of the reference's on LVN\_heo1. This is not a
+degraded fit, it is no fit at all.
+
+\paragraph{The RMSE table does not hide it here, which is luck rather than
+design.} On those two grids PIGNN is also the \emph{worst} of the four on $|V|$
+RMSE --- $5.10\times10^{-2}$ on LVN\_heo1 against $2.2$--$2.7\times10^{-2}$, and
+$6.60\times10^{-2}$ on case1888rte against $2.5$--$3.1\times10^{-2}$ --- so a
+reader looking only at Section 1 would have flagged them anyway. That alignment
+is not guaranteed: a constant predictor sits near the mean voltage, and on a grid
+with a narrower voltage spread it would post a competitive RMSE while carrying no
+information. The slope is what distinguishes the two cases, and it is the reason
+this table exists.
+
+\paragraph{So the open question has an answer, and it is not the flattering
+one.} PIGNN's iteration does not confer immunity to the collapse. It converts it
+into a sharper, more bimodal outcome: markedly better than the feed-forward
+models on two of the four hard grids, and a total failure on the other two.
+
+\paragraph{Coverage.} 23 of 31 for PIGNN; the eight still training are
+ENTSO\_E\_RealGridTest, case2848rte, case2869pegase, case3120sp, case6470rte,
+case6495rte, case6515rte and case9241pegase --- all large, and three of them
+(case3120sp at mirror slope 0.19, case9241pegase 0.49, case2869pegase 0.34) are
+themselves collapse cases. The 2-for-2 split above is therefore over a small
+sample and could move either way.
 
 \paragraph{How the PIGNN scores were validated.} The inference path had to be
 established against the training logs rather than read off defaults, because
@@ -352,8 +385,8 @@ function. Three had to be corrected: \texttt{use\_armijo} (the decisive one),
 \texttt{use\_armijo} off the model returned $|V|$ RMSE $2.05\times10^{-1}$
 against a logged $8.76\times10^{-4}$, a factor of 234, with no error raised.
 
-The 15 scores now reproduce their training runs to within \textbf{0.7\%
-relative}, median 0.07\%. That is looser than the $2\times10^{-4}$ the GridFM
+The 23 scores reproduce their training runs to within \textbf{0.7\%
+relative}, median 0.006\%. That is looser than the $2\times10^{-4}$ the GridFM
 re-scores achieve, and the reason is structural: PIGNN runs 40 solver iterations
 in float32, so ordinary GPU non-determinism compounds where a single forward pass
 does not. It is agreement to three significant figures, not an unexplained
