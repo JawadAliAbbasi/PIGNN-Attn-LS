@@ -54,6 +54,15 @@ K="${K:-40}"
 # gradient at all because every candidate step was rejected. Neither setting is
 # safe everywhere on this corpus.
 USE_ARMIJO="${USE_ARMIJO:-0}"
+# train_valid_test.py defaults --armijo_mode to "fixed", which discards the
+# solver step whenever neither the line search nor its fallback decreases the
+# mismatch. On grids where that happens every iteration the returned voltage is
+# the constant input, the loss arrives detached, and the driver's zero-grad
+# guard turns training into a no-op -- measured on 11 of the 31 grids in the
+# 20260812 campaign, which ran without this flag. Set ARMIJO_MODE=geometric_safe
+# to keep the graph edge alive. Empty means "do not pass the flag", which
+# preserves the original behaviour for reproducing that campaign.
+ARMIJO_MODE="${ARMIJO_MODE:-}"
 
 MANIFEST=(
   "case4gs|4|case4gs_ppcY_backbone_dc_compile_ppNR_ls0.60-1.40_siNR_36000_NR_branchrows_directSI_rg20.parquet|48706591"   # 36000 rows, 0.05 GB
@@ -162,6 +171,7 @@ for g in "${SELECTED[@]}"; do
     fi
     armijo_flag=""
     [ "${USE_ARMIJO}" = "1" ] && armijo_flag="--use_armijo"
+    [ -n "${ARMIJO_MODE}" ] && armijo_flag="${armijo_flag} --armijo_mode ${ARMIJO_MODE}"
     cat > "${STAGE}/${label}.sh" <<EOF
 #!/bin/bash -l
 #SBATCH --job-name=${label}
