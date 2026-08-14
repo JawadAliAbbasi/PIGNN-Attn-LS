@@ -1,0 +1,273 @@
+\documentclass[10pt]{article}
+\usepackage[margin=0.8in]{geometry}
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage{float}
+\title{A state-space increment with an Armijo line search on the GridFM-PF backbone\\
+\large A negative result, and what it does and does not show}
+\author{PIGNN-Attn-LS-PPC experimental summary}
+\date{14 August 2026}
+\begin{document}
+\maketitle
+
+\section{Why this was tried}
+
+Reading GENCO (arXiv:2608.09921) raised a question: GENCO runs $N$ correction
+steps, PIGNN-Attn-LS runs $K=40$ correction steps, so if a line search helps the
+latter it should help the former. Examining the code showed the premise was only
+half right.
+
+The released GridFM-PF model (\texttt{GNS\_heterogeneous}) already runs the
+iterative loop with physics feedback. Its per-layer body decodes an
+\emph{absolute} voltage state from the latent, computes the power-balance
+residual, and injects it back:
+
+\begin{center}
+\texttt{h\_bus = h\_bus + physics\_mlp(bus\_residuals)}
+\end{center}
+
+GENCO's Eq.~(17) is the same update. So the feedback loop is not GENCO's
+contribution over GridFM-PF --- its contributions are the HGT backbone, the
+discounted deep-supervision loss, the OPF/SE decoders, box constraints, and
+analytic $Q_g$ recovery.
+
+\paragraph{The structural difference that matters.} The GridFM/GENCO update adds
+in \emph{latent} space and re-decodes the state from scratch at every layer.
+PIGNN updates the \emph{state}, $V \leftarrow \mathrm{clamp}(V + \alpha\,dV)$,
+with $\alpha$ from Armijo backtracking. A line search needs a step in the space
+the objective is a function of; a latent injection is not one. So a line search
+cannot be attached to GridFM-PF or GENCO as they stand.
+
+\paragraph{The change.} Read the per-layer decoder output as an increment to a
+running state instead of as a fresh absolute state, and scale it by a line
+search on the power-balance residual. Everything else --- backbone, feedback
+loop, masking, loss, data, splits --- unchanged. Three variants were run:
+
+\begin{table}[H]
+\centering\small
+\begin{tabular}{llll}
+\toprule
+Tag & Decoder output & Step length & Parameters \\
+\midrule
+\texttt{graphkit}     & absolute state (upstream) & --- & 20{,}069{,}187 \\
+\texttt{graphkit\_inc} & increment                & always 1 & 20{,}069{,}187 \\
+\texttt{graphkit\_ls}  & increment                & Armijo backtracking & 20{,}069{,}187 \\
+\bottomrule
+\end{tabular}
+\caption{Identical parameter counts, confirmed at run time: the backbone was not
+touched, only the forward pass. \texttt{graphkit\_inc} exists to separate the
+reparameterisation from the line search --- without it a result could be
+attributed to either.}
+\end{table}
+
+\section{Result: the change makes the model worse}
+
+\texttt{graphkit\_ls} is worse than the unmodified \texttt{graphkit} on
+\textbf{22 of the 26} grids that finished, median $|V|$ RMSE ratio
+\textbf{1.81}, and worse on $\Delta P^{\infty}$ on 23 of 26, median ratio
+\textbf{3.75}.
+
+\begin{table}[H]
+\centering\scriptsize
+\begin{tabular}{lrrrrrrr}
+\toprule
+ & & \multicolumn{3}{c}{$|V|$ RMSE [pu]} & \multicolumn{3}{c}{$\Delta P^{\infty}$ [pu]} \\
+\cmidrule(lr){3-5}\cmidrule(lr){6-8}
+Grid & Buses & graphkit & \_ls & ratio & graphkit & \_ls & ratio \\
+\midrule
+case5 & 5 & 6.459e-05 & 1.241e-02 & 192.1 & 3.82e-02 & 1.35e+01 & 354.0 \\
+case6ww & 6 & 4.757e-04 & 4.674e-02 & 98.3 & 1.57e-02 & 1.51e+00 & 95.8 \\
+case14 & 14 & 8.409e-04 & 2.563e-02 & 30.5 & 2.65e-02 & 2.61e+00 & 98.3 \\
+SimBench & 94 & 1.584e-03 & 3.793e-02 & 23.9 & 8.74e-02 & 2.61e+00 & 29.8 \\
+case1888rte & 1888 & 2.887e-02 & 2.119e-01 & 7.3 & 1.38e+02 & 8.82e+02 & 6.4 \\
+case89pegase & 89 & 1.285e-02 & 5.995e-02 & 4.7 & 1.43e+00 & 2.13e+02 & 148.6 \\
+case9 & 9 & 8.752e-04 & 3.327e-03 & 3.8 & 2.93e-02 & 1.01e-01 & 3.4 \\
+GBreducednetwork & 29 & 5.086e-04 & 1.566e-03 & 3.1 & 1.52e+01 & 1.91e+01 & 1.3 \\
+LVN\_heo1 & 722 & 2.229e-02 & 5.100e-02 & 2.3 & 6.51e+00 & 1.76e+02 & 27.1 \\
+case4gs & 4 & 2.857e-04 & 6.244e-04 & 2.2 & 2.05e-02 & 6.69e-02 & 3.3 \\
+case30 & 30 & 1.753e-03 & 3.647e-03 & 2.1 & 3.44e-02 & 1.03e-01 & 3.0 \\
+case2848rte & 2848 & 3.176e-02 & 6.335e-02 & 2.0 & 2.72e+01 & 2.86e+03 & 105.2 \\
+case\_ieee30 & 30 & 4.270e-03 & 7.800e-03 & 1.8 & 5.91e-02 & 1.92e-01 & 3.2 \\
+iceland & 189 & 1.586e-02 & 2.852e-02 & 1.8 & 1.15e+00 & 4.37e+02 & 380.1 \\
+case57 & 57 & 6.306e-03 & 1.090e-02 & 1.7 & 1.49e-01 & 1.83e-01 & 1.2 \\
+case33bw & 33 & 9.452e-03 & 1.621e-02 & 1.7 & 2.06e-02 & 8.97e-02 & 4.3 \\
+case118 & 118 & 1.320e-03 & 2.246e-03 & 1.7 & 2.61e-01 & 2.71e-01 & 1.0 \\
+GBnetwork & 2224 & 3.354e-02 & 5.656e-02 & 1.7 & 1.70e+02 & 1.51e+04 & 88.5 \\
+case2869pegase & 2869 & 2.860e-02 & 3.325e-02 & 1.2 & 1.92e+02 & 1.49e+03 & 7.8 \\
+case\_illinois200 & 200 & 7.814e-03 & 8.444e-03 & 1.1 & 2.60e-01 & 5.18e-01 & 2.0 \\
+case3120sp & 3120 & 2.771e-02 & 2.834e-02 & 1.0 & 3.28e+03 & 1.62e+03 & 0.5 \\
+case300 & 300 & 2.343e-02 & 2.343e-02 & 1.0 & 1.03e+01 & 3.52e+01 & 3.4 \\
+case1354pegase & 1354 & 2.324e-02 & 1.995e-02 & 0.9 & 2.90e+01 & 1.18e+02 & 4.1 \\
+case24\_ieee\_rts & 24 & 1.677e-03 & 1.289e-03 & 0.8 & 2.32e-01 & 1.73e-01 & 0.7 \\
+case39 & 39 & 9.046e-03 & 6.804e-03 & 0.8 & 6.92e-01 & 7.52e-01 & 1.1 \\
+case145 & 145 & 1.666e-01 & 2.792e-02 & 0.2 & 3.43e+02 & 2.97e+01 & 0.1 \\
+\bottomrule
+\end{tabular}
+\caption{Sorted worst-first by $|V|$ ratio. Ratios above 1 mean the modified
+model is worse.}
+\end{table}
+
+\section{It is not a large-grid win}
+
+The four grids where \texttt{\_ls} wins invite the reading that the change helps
+on large grids. It does not survive checking.
+
+\begin{table}[H]
+\centering\small
+\begin{tabular}{lrrr}
+\toprule
+ & $n$ & median $|V|$ ratio & \_ls better on \\
+\midrule
+$<1000$ buses    & 20 & 1.95 & 3 \\
+$\geq 1000$ buses & 6 & 1.42 & 1 \\
+\bottomrule
+\end{tabular}
+\caption{Both medians are above 1: on large grids the modified model is less bad,
+not better.}
+\end{table}
+
+Two facts settle it. First, the individually largest grids are among the worst
+losses --- case1888rte $7.3\times$, case2848rte $2.0\times$, GBnetwork
+$1.7\times$. Second, the rank correlation of $\log$(ratio) is
+$-0.451$ against $\log$(bus count) but \textbf{$-0.539$ against the baseline's
+own $|V|$ RMSE}: the pattern tracks how good the baseline already was more
+closely than it tracks size, and size and baseline difficulty are themselves
+correlated.
+
+The wins are consistent with a ceiling effect. Two of the four are small grids
+(case24\_ieee\_rts at 24 buses, case39 at 39). The largest win, case145 at
+$0.17\times$, is a grid where the baseline is \emph{broken}: graphkit posts a
+negative $|V|$ regression slope there ($-0.199$ on PQ buses), i.e.\ its
+prediction is anti-correlated with the reference. Beating a broken baseline is
+not evidence of benefit.
+
+\section{Which half of the change is at fault}
+
+This is the part worth keeping. On the 11 grids where all three variants
+finished:
+
+\begin{table}[H]
+\centering\scriptsize
+\begin{tabular}{lrrrrrrr}
+\toprule
+ & & \multicolumn{3}{c}{$|V|$ RMSE [pu]} & \multicolumn{3}{c}{ratio} \\
+\cmidrule(lr){3-5}\cmidrule(lr){6-8}
+Grid & Buses & graphkit & \_inc & \_ls & \_inc/gk & \_ls/gk & \_ls/\_inc \\
+\midrule
+case4gs & 4 & 2.857e-04 & 3.670e-03 & 6.244e-04 & 12.84 & 2.19 & 0.17 \\
+case5 & 5 & 6.459e-05 & 6.867e-04 & 1.241e-02 & 10.63 & 192.11 & 18.07 \\
+case6ww & 6 & 4.757e-04 & 3.954e-03 & 4.674e-02 & 8.31 & 98.26 & 11.82 \\
+case9 & 9 & 8.752e-04 & 3.125e-03 & 3.327e-03 & 3.57 & 3.80 & 1.06 \\
+case14 & 14 & 8.409e-04 & 8.489e-03 & 2.563e-02 & 10.10 & 30.48 & 3.02 \\
+case24\_ieee\_rts & 24 & 1.677e-03 & 1.092e-02 & 1.289e-03 & 6.51 & 0.77 & 0.12 \\
+GBreducednetwork & 29 & 5.086e-04 & 6.221e-03 & 1.566e-03 & 12.23 & 3.08 & 0.25 \\
+case30 & 30 & 1.753e-03 & 7.993e-03 & 3.647e-03 & 4.56 & 2.08 & 0.46 \\
+case\_ieee30 & 30 & 4.270e-03 & 1.451e-02 & 7.800e-03 & 3.40 & 1.83 & 0.54 \\
+case39 & 39 & 9.046e-03 & 8.047e-03 & 6.804e-03 & 0.89 & 0.75 & 0.85 \\
+case145 & 145 & 1.666e-01 & 3.670e-02 & 2.792e-02 & 0.22 & 0.17 & 0.76 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[H]
+\centering\small
+\begin{tabular}{lrr}
+\toprule
+Comparison & median ratio & better on \\
+\midrule
+\texttt{\_inc} vs \texttt{graphkit} & 6.51 & 2/11 \\
+\texttt{\_ls} vs \texttt{graphkit}  & 2.19 & 3/11 \\
+\textbf{\texttt{\_ls} vs \texttt{\_inc}} & \textbf{0.76} & \textbf{7/11} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{The incremental reparameterisation is what breaks the model, and the line
+search partially repairs it.} Turning the decoder into an increment costs a
+factor of 6.5; adding the line search on top recovers roughly a third of that
+($0.76\times$, better on 7 of 11). This inverts the hypothesis the experiment
+started from --- the working assumption before running \texttt{\_inc} was that
+the line search was suppressing steps and causing the damage. It is doing the
+opposite.
+
+\paragraph{Why the increment hurts.} The upstream decoder is trained to emit an
+absolute state and is followed immediately by a physics decoder that completes
+the solution. Re-reading its output as a correction to a running state changes
+what the head must learn without giving it any more capacity, and it removes the
+model's ability to discard a bad intermediate state --- an absolute decode can
+jump anywhere, an increment can only walk.
+
+\section{Corroborating measurement: what the line search actually did}
+
+A probe of a smoke-trained checkpoint, 12 layers $\times$ 32 graphs:
+
+\begin{table}[H]
+\centering\small
+\begin{tabular}{lr}
+\toprule
+mean $\alpha$ & 0.115 \\
+fraction $\alpha = 1$ & 0.000 \\
+fraction $\alpha = 0$ (step rejected outright) & 0.354 \\
+layers with $\alpha = 0$ on every graph & 3 of 12 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The full step was never accepted and a third of steps were rejected, which
+prompted widening the backtracking range from 4 to 6 halvings before the
+campaign. In hindsight this was treating a symptom: the acceptance test is
+applied to a direction with no descent guarantee, because it comes from a
+learned head rather than a gradient. Rejection therefore does not mean "the step
+was too long", and lowering the floor cannot fix it.
+
+\section{What this does and does not show}
+
+\paragraph{It does not contradict the line search helping PIGNN-Attn-LS.} PIGNN
+constructs its direction to be a descent direction --- it projects onto the
+descent half-space before backtracking --- and its increments are the model's
+native parameterisation, not a reinterpretation of a head trained for something
+else. Nothing here bears on that.
+
+\paragraph{It does show that the ingredient is not portable by itself.} Bolting a
+state-space line search onto a backbone whose decoder was trained to emit
+absolute states does not transfer the benefit; the reparameterisation it requires
+costs more than the line search returns.
+
+\paragraph{What a fair test would need.} Train the incremental decoder from a
+matched initialisation with a descent-projected direction, as PIGNN does, rather
+than reinterpreting the upstream head. That is a different and larger experiment
+than this one, and it was not run.
+
+\section{Status and coverage}
+
+The experiment is \textbf{abandoned}; all jobs on both clusters were cancelled.
+Nothing here is a complete campaign and none of it should be folded into the
+31-grid comparison tables.
+
+\begin{table}[H]
+\centering\small
+\begin{tabular}{llrl}
+\toprule
+Variant & Cluster & Finished & Notes \\
+\midrule
+\texttt{graphkit\_ls}  & helma h100 & 26/31 & 1 NODE\_FAIL (case6515rte), 4 cancelled mid-run \\
+\texttt{graphkit\_inc} & alex2 a100 & 11/31 & 20 cancelled; the 11 are all $\leq 145$ buses \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Two caveats on the numbers above. The three-way decomposition rests on 11 small
+grids only, because \texttt{\_inc} was cancelled before any large grid finished
+--- the direction of that result is clear but its magnitude on large grids is
+unmeasured. And \texttt{\_inc} ran on a100 with a smaller batch budget
+(\texttt{BN\_BUDGET} 50000 against 120000) because an a100 is a 40~GB card; the
+batch cap of 64 binds below roughly 780 buses, so for all 11 grids in the
+decomposition the batch was identical to the helma runs and that confound does
+not apply here.
+
+\paragraph{Code.} \texttt{genco\_ls.py} and the
+\texttt{-{}-gridfm\_impl graphkit\_ls|graphkit\_inc} switches are kept. They are
+a working, parameter-identical implementation of the idea and are the starting
+point if the fair test above is ever run.
+
+\end{document}

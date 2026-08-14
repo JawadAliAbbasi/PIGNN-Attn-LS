@@ -110,13 +110,23 @@ def parse_args():
              "campaign stays reproducible.",
     )
     parser.add_argument(
+        "--armijo_max_backtracks",
+        type=int,
+        default=6,
+        help="graphkit_ls only: backtracking depth. With rho=0.5 the smallest "
+             "step is 2^-(n-1), so 6 reaches 0.031.",
+    )
+    parser.add_argument(
         "--gridfm_impl",
-        choices=("mirror", "graphkit"),
+        choices=("mirror", "graphkit", "graphkit_ls", "graphkit_inc"),
         default="mirror",
         help="mirror: the local GridFMHeteroSurrogate. graphkit: the released "
              "gridfm_graphkit GNS_heterogeneous, which adds per-layer physics "
-             "feedback and a PhysicsDecoderPF. Neither has published weights, "
-             "so both are scratch-only.",
+             "feedback and a PhysicsDecoderPF. graphkit_ls: the same backbone "
+             "with the per-layer decoder read as a state-space increment and "
+             "scaled by an Armijo line search. graphkit_inc: the increment "
+             "without the line search, which separates the two changes. None "
+             "has published weights, so all are scratch-only.",
     )
     parser.add_argument(
         "--task",
@@ -930,18 +940,31 @@ def run():
     val_loader = DataLoader(val_ds, shuffle=False, **loader_kwargs)
     test_loader = DataLoader(test_ds, shuffle=False, **loader_kwargs)
 
-    if args.gridfm_impl == "graphkit":
-        from gridfm_graphkit_adapter import build_graphkit_model
+    if args.gridfm_impl.startswith("graphkit"):
+        from gridfm_graphkit_adapter import build_graphkit_model, make_args
         # Bus/gen feature layouts are byte-identical to gridfm_graphkit's own
         # globals, so only capacity is ours to choose.
-        model = build_graphkit_model(
-            task_name=("OptimalPowerFlow" if is_opf else "PowerFlow"),
-            hidden_size=args.hidden_size,
-            num_layers=args.num_layers,
-            attention_head=args.n_heads,
-        ).to(device)
+        if args.gridfm_impl == "graphkit":
+            model = build_graphkit_model(
+                task_name=("OptimalPowerFlow" if is_opf else "PowerFlow"),
+                hidden_size=args.hidden_size,
+                num_layers=args.num_layers,
+                attention_head=args.n_heads,
+            ).to(device)
+        else:
+            if is_opf:
+                raise SystemExit(
+                    f"--gridfm_impl {args.gridfm_impl} is power-flow only; its "
+                    f"line-search objective is the power-balance residual.")
+            from genco_ls import GNS_heterogeneous_LS
+            model = GNS_heterogeneous_LS(
+                make_args("PowerFlow", args.hidden_size, args.num_layers,
+                          args.n_heads, 0.0),
+                line_search=(args.gridfm_impl == "graphkit_ls"),
+                armijo_max_backtracks=args.armijo_max_backtracks,
+            ).to(device)
         n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-        print(f"[model] gridfm_impl=graphkit trainable_params={n_params:,}")
+        print(f"[model] gridfm_impl={args.gridfm_impl} trainable_params={n_params:,}")
     else:
         model = GridFMHeteroSurrogate(
             hidden_size=args.hidden_size,
@@ -1045,7 +1068,7 @@ def run():
                     args.feature_transform,
                     opf_space=space_dev,
                 )
-                if args.gridfm_impl == "graphkit":
+                if args.gridfm_impl.startswith("graphkit"):
                     from gridfm_graphkit_adapter import forward_graphkit_parquet
                     Vraw = forward_graphkit_parquet(
                         model, batch_dev, device,
