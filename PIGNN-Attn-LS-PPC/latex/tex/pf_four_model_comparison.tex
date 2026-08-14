@@ -1,53 +1,86 @@
 \documentclass[10pt]{article}
-\usepackage[margin=0.5in,landscape]{geometry}
+\usepackage[margin=0.5in]{geometry}
 \usepackage{amsmath}
 \usepackage{booktabs}
 \usepackage{float}
+\usepackage{pdflscape}
 \title{AC power-flow surrogates: four implementations, five metric families\\
 \large 31 PPC grids, one model per grid}
 \author{PIGNN-Attn-LS-PPC experimental summary}
-\date{13 August 2026}
+\date{14 August 2026}
 \begin{document}
 \maketitle
 
 \section{What is being compared}
 
-Four implementations, each trained one model per grid on the Phase-0 backbone
-corpus: same parquet, same $1/3$--$1/3$--$1/3$ split, same seed 42. Both drivers
-call \texttt{random\_split} with the same lengths and the same seeded generator,
-so the held-out rows are identical and the numbers are directly comparable.
+Sections 3--7 compare the three GridFM implementations. This section adds
+\textbf{PIGNN-Attn-LS} (\texttt{GNSMsg\_EdgeSelfAttn}) as a fourth and repeats
+every metric family over all four.
+
+\paragraph{It is not a like-for-like architecture comparison.} The three GridFM
+variants are feed-forward: one pass, one prediction, roughly 20 million
+parameters. PIGNN runs $K=40$ physics-informed solver steps per scenario with
+65{,}896 parameters --- closer to a learned Newton iteration than to a direct
+surrogate, and correspondingly more expensive at inference. All four share the
+parquet, the $1/3$--$1/3$--$1/3$ split and seed 42; both drivers call
+\texttt{random\_split} with the same lengths and the same seeded generator, so
+the held-out rows are identical.
+
+\paragraph{PIGNN setup.} $d=4$, $d_{\rm hi}=24$, 8 heads, 8 attention layers,
+$K=40$, Armijo line search on. 40 epochs, AdamW at LR $10^{-4}$, the same
+$\mathrm{MSE}(V) + 10^{-2}\,\mathcal{L}_{\rm phys}$ log-cosh loss the GridFM runs
+used, per-unit on 100~MVA, complex128, the same sparse Y-bus. Run on alex A40s,
+one job per grid. At 65{,}896 parameters it is \textbf{304 times smaller} than
+the mirror model.
+
+\paragraph{\textbf{Eleven PIGNN runs never learned, and their numbers are not
+results.}} On 11 of the 31 grids the training driver's zero-grad guard fired on
+\textbf{96--99.6\% of batches}: the loss arrived detached from the graph, the
+guard replaced it with $0 \cdot \lVert\theta\rVert$, and the optimiser step
+became a no-op. The signature is unmistakable in the logs --- validation RMSE
+takes \emph{one or two distinct values across all 41 epochs}, identical to four or five
+significant figures from the first epoch to the last:
 
 \begin{table}[H]
 \centering\small
-\begin{tabular}{llll}
+\begin{tabular}{lrrr}
 \toprule
-Tag & Model & $|V|$ at PV/slack, $\theta$ at slack & Coverage \\
+Grid & batches with no gradient & distinct valid RMSE & valid RMSE, all epochs \\
 \midrule
-\texttt{mirror}    & \texttt{GridFMHeteroSurrogate} (local GridFM-style) & predicted & 31/31 \\
-\texttt{mirrorpin} & the same, \texttt{-{}-pin\_known}                   & held to the given input & 31/31 \\
-\texttt{graphkit}  & IBM \texttt{GNS\_heterogeneous}                     & held to the given input & 31/31 \\
-\texttt{pignn}     & \texttt{GNSMsg\_EdgeSelfAttn} (PIGNN-Attn-LS)       & held to the given input & \textbf{23/31} \\
+case2869pegase & 99.6\% & 2 of 37 & 6.0352--6.0355e-01 \\
+GBnetwork      & 97.6\% & 1 of 41 & 1.6118e-01 \\
+case1888rte    & 97.5\% & 1 of 41 & 3.6676e-01 \\
+LVN\_heo1      & 96.2\% & 2 of 41 & 5.1179--5.1180e-02 \\
 \bottomrule
 \end{tabular}
-\caption{The three GridFM variants ran on helma; PIGNN ran on alex with $K=40$,
-$d_{hi}=24$, 8 heads, 8 attention layers, 65{,}896 parameters. PIGNN's eight
-largest grids were still training when this was compiled and appear as
-\texttt{---}. A dash always means not measured, never measured-as-zero.}
+\caption{Four of the eleven. Every grid where PIGNN trained normally shows 40 or
+41 distinct validation RMSE values and fewer than 900 guard firings; every grid
+where it did not shows at most four distinct values and more than 14{,}000. The
+separation is complete --- there is no middle case.}
 \end{table}
 
-\paragraph{PIGNN is not the same kind of model, and the comparison is not
-apples-to-apples.} The three GridFM variants are feed-forward: one pass, one
-prediction, roughly 20 million parameters. PIGNN-Attn-LS runs $K=40$
-physics-informed solver steps per scenario with 66 thousand parameters --- it is
-closer to a learned Newton iteration than to a direct surrogate, and it pays for
-that in inference cost. Its advantage below should be read as what the iterative
-approach buys, not as one architecture being uniformly better.
+The eleven are ENTSO\_E\_RealGridTest, GBnetwork, LVN\_heo1, case1888rte,
+case2848rte, case2869pegase, case3120sp, case6470rte, case6495rte, case6515rte
+and case9241pegase. Their pignn cells below carry a dagger$^\dagger$ and are
+excluded from the best-per-grid comparison: they describe the initialisation,
+not a trained model. \textbf{This corrects the previous revision}, which read
+PIGNN's slope of exactly 0.000 on LVN\_heo1 and case1888rte as a modelling
+collapse. It was not --- those runs had no gradient signal at all.
 
-\paragraph{Which grids are in the aggregate.} Win counts and medians quoted in
-the text are over the \textbf{23 grids all four models have finished}, so the
-four are always compared on the same set.
+\paragraph{Eight of the eleven were also cut short.} They hit the 24-hour wall
+clock (every alex partition caps at \texttt{1-00:00:00}) at epochs 16 to 36 of
+40, so they have no test block and their row shows \emph{validation} at the
+best-validation epoch instead. The epoch reached is given after the grid name as
+\texttt{(n/40)}. Since those runs were not learning, the truncation is the
+lesser problem.
 
-\section{Voltage magnitude and angle RMSE}
+\paragraph{Coverage.} 31/31 for the three GridFM variants. For PIGNN, 31/31
+trained but only \textbf{20 usable}; slope and $R^2$ additionally require an
+inference pass, which covers the 23 runs that produced a checkpoint worth
+scoring. All aggregate figures below are over the \textbf{20 grids where PIGNN
+actually learned}, so the four models are always compared on the same set.
+
+\begin{landscape}
 \begin{table}[H]
 \centering\scriptsize
 \begin{tabular}{lrr rrrr rrrr}
@@ -65,7 +98,7 @@ case24\_ieee\_rts & 24 & 54\% & 2.06e-03 & 1.80e-03 & 1.68e-03 & \textbf{6.18e-0
 case14 & 14 & 64\% & 2.50e-03 & 1.83e-03 & 8.41e-04 & \textbf{1.59e-04} & 3.02e-01 & 2.97e-01 & 1.86e-01 & \textbf{3.22e-02} \\
 case118 & 118 & 54\% & 2.94e-03 & 1.93e-03 & 1.32e-03 & \textbf{1.08e-04} & 6.33e-01 & 6.36e-01 & 7.54e-01 & \textbf{2.01e-01} \\
 case9 & 9 & 67\% & 3.83e-03 & 1.98e-03 & 8.75e-04 & \textbf{6.71e-05} & 4.61e-01 & 3.41e-01 & 1.52e-01 & \textbf{2.78e-02} \\
-ENTSO\_E\_RealGridTest & 6051 & 93\% & 2.63e-03 & \textbf{2.54e-03} & 2.43e-02 & --- & \textbf{4.44e-01} & 4.96e-01 & 4.38e+00 & --- \\
+ENTSO\_E\_RealGridTest\,(16/40) & 6051 & 93\% & 2.63e-03 & \textbf{2.54e-03} & 2.43e-02 & 3.31e-02$^\dagger$ & \textbf{4.44e-01} & 4.96e-01 & 4.38e+00 & 7.52e+00$^\dagger$ \\
 case\_ieee30 & 30 & 80\% & 4.53e-03 & 3.31e-03 & 4.27e-03 & \textbf{8.98e-04} & 3.56e-01 & 3.64e-01 & 3.47e-01 & \textbf{1.47e-01} \\
 GBreducednetwork & 29 & 17\% & 2.29e-02 & 5.09e-03 & 5.09e-04 & \textbf{1.03e-05} & 1.27e+00 & 1.34e+00 & 2.05e+00 & \textbf{7.64e-02} \\
 case\_illinois200 & 200 & 81\% & 6.62e-03 & 5.64e-03 & 7.81e-03 & \textbf{2.07e-03} & 4.84e-01 & \textbf{4.38e-01} & 8.78e-01 & 5.10e-01 \\
@@ -74,32 +107,32 @@ case57 & 57 & 88\% & 8.65e-03 & 7.48e-03 & \textbf{6.31e-03} & 2.07e-02 & 4.57e-
 case33bw & 33 & 97\% & 1.10e-02 & 1.10e-02 & 9.45e-03 & \textbf{9.44e-03} & 1.70e-01 & \textbf{1.35e-01} & 1.39e-01 & 2.91e-01 \\
 case300 & 300 & 77\% & 1.15e-02 & \textbf{1.15e-02} & 2.34e-02 & 2.20e-02 & \textbf{2.69e+00} & 2.91e+00 & 4.72e+00 & 4.16e+00 \\
 iceland & 189 & 81\% & 1.71e-02 & \textbf{1.42e-02} & 1.59e-02 & 4.05e-02 & 1.82e+00 & \textbf{1.70e+00} & 2.11e+00 & 5.72e+00 \\
-case6495rte & 6495 & 92\% & 1.77e-02 & \textbf{1.52e-02} & 4.11e-02 & --- & 1.09e+00 & \textbf{1.05e+00} & 4.21e+00 & --- \\
-case6515rte & 6515 & 92\% & 2.25e-02 & \textbf{1.60e-02} & 5.32e-02 & --- & \textbf{2.00e+00} & 2.27e+00 & 8.12e+00 & --- \\
+case6495rte\,(25/40) & 6495 & 92\% & 1.77e-02 & \textbf{1.52e-02} & 4.11e-02 & 4.88e-02$^\dagger$ & 1.09e+00 & \textbf{1.05e+00} & 4.21e+00 & 5.60e+00$^\dagger$ \\
+case6515rte\,(29/40) & 6515 & 92\% & 2.25e-02 & \textbf{1.60e-02} & 5.32e-02 & 4.90e-02$^\dagger$ & \textbf{2.00e+00} & 2.27e+00 & 8.12e+00 & 2.40e+01$^\dagger$ \\
 case1354pegase & 1354 & 81\% & 2.41e-02 & 1.87e-02 & 2.32e-02 & \textbf{1.43e-02} & \textbf{2.64e+00} & 3.09e+00 & 6.07e+00 & 7.14e+00 \\
 case89pegase & 89 & 87\% & 2.73e-02 & 1.90e-02 & 1.29e-02 & \textbf{7.13e-03} & 1.14e+00 & 1.07e+00 & 1.14e+00 & \textbf{4.50e-01} \\
-case6470rte & 6470 & 93\% & 2.17e-02 & \textbf{1.96e-02} & 5.23e-02 & --- & \textbf{3.27e+00} & 3.34e+00 & 9.68e+00 & --- \\
-case2869pegase & 2869 & 82\% & 2.52e-02 & \textbf{2.04e-02} & 2.86e-02 & --- & 3.88e+00 & \textbf{3.38e+00} & 1.14e+01 & --- \\
-case3120sp & 3120 & 92\% & 2.84e-02 & \textbf{2.09e-02} & 2.77e-02 & --- & 6.25e+00 & \textbf{5.46e+00} & 8.23e+00 & --- \\
-LVN\_heo1 & 722 & 99\% & 2.74e-02 & \textbf{2.23e-02} & 2.23e-02 & 5.10e-02 & \textbf{1.87e-01} & 1.98e-01 & 1.50e+00 & 2.82e-01 \\
+case6470rte\,(23/40) & 6470 & 93\% & 2.17e-02 & \textbf{1.96e-02} & 5.23e-02 & 4.51e-02$^\dagger$ & \textbf{3.27e+00} & 3.34e+00 & 9.68e+00 & 3.37e+01$^\dagger$ \\
+case2869pegase\,(36/40) & 2869 & 82\% & 2.52e-02 & \textbf{2.04e-02} & 2.86e-02 & 3.30e-02$^\dagger$ & 3.88e+00 & \textbf{3.38e+00} & 1.14e+01 & 3.45e+01$^\dagger$ \\
+case3120sp\,(33/40) & 3120 & 92\% & 2.84e-02 & \textbf{2.09e-02} & 2.77e-02 & 3.79e-02$^\dagger$ & 6.25e+00 & \textbf{5.46e+00} & 8.23e+00 & 1.55e+01$^\dagger$ \\
+LVN\_heo1 & 722 & 99\% & 2.74e-02 & \textbf{2.23e-02} & 2.23e-02 & 5.10e-02$^\dagger$ & \textbf{1.87e-01} & 1.98e-01 & 1.50e+00 & 2.82e-01$^\dagger$ \\
 case145 & 145 & 66\% & 2.76e-02 & 2.30e-02 & 1.67e-01 & \textbf{1.66e-02} & 1.17e+01 & 1.24e+01 & 2.16e+01 & \textbf{1.17e+01} \\
-case1888rte & 1888 & 86\% & 3.06e-02 & \textbf{2.46e-02} & 2.89e-02 & 6.60e-02 & 3.53e+00 & \textbf{2.92e+00} & 1.04e+01 & 2.08e+01 \\
-case2848rte & 2848 & 87\% & 2.61e-02 & \textbf{2.49e-02} & 3.18e-02 & --- & \textbf{1.52e+00} & 1.73e+00 & 4.15e+00 & --- \\
-case9241pegase & 9241 & 84\% & 2.76e-02 & \textbf{2.60e-02} & 7.09e-02 & --- & \textbf{6.85e+00} & 7.04e+00 & 1.55e+01 & --- \\
-GBnetwork & 2224 & 83\% & \textbf{2.26e-02} & 2.87e-02 & 3.35e-02 & 5.66e-02 & 1.26e+00 & \textbf{1.24e+00} & 4.62e+00 & 8.61e+00 \\
+case1888rte & 1888 & 86\% & 3.06e-02 & \textbf{2.46e-02} & 2.89e-02 & 6.60e-02$^\dagger$ & 3.53e+00 & \textbf{2.92e+00} & 1.04e+01 & 2.08e+01$^\dagger$ \\
+case2848rte\,(34/40) & 2848 & 87\% & 2.61e-02 & \textbf{2.49e-02} & 3.18e-02 & 6.34e-02$^\dagger$ & \textbf{1.52e+00} & 1.73e+00 & 4.15e+00 & 6.77e+00$^\dagger$ \\
+case9241pegase\,(21/40) & 9241 & 84\% & 2.76e-02 & \textbf{2.60e-02} & 7.09e-02 & 4.39e-02$^\dagger$ & \textbf{6.85e+00} & 7.04e+00 & 1.55e+01 & 1.08e+02$^\dagger$ \\
+GBnetwork & 2224 & 83\% & \textbf{2.26e-02} & 2.87e-02 & 3.35e-02 & 5.66e-02$^\dagger$ & 1.26e+00 & \textbf{1.24e+00} & 4.62e+00 & 8.61e+00$^\dagger$ \\
 \bottomrule
 \end{tabular}
-\caption{Test-set RMSE, sorted by mirrorpin $|V|$ RMSE; best per grid in bold.}
+\caption{Voltage magnitude and angle RMSE, sorted by mirrorpin $|V|$ RMSE; best per grid in bold, dagger = run never learned.}
 \end{table}
+\end{landscape}
 
-\paragraph{PIGNN wins the voltage state.} Over the 23 shared grids it takes
-$|V|$ on 17 and $\theta$ on 15. The medians are
-$8.98\times10^{-4}$ pu against mirror $6.96\times10^{-3}$, mirrorpin
-$5.64\times10^{-3}$ and graphkit $6.31\times10^{-3}$ --- between six and eight
-times better. On angle the medians are $0.28^\circ$ against
-$0.48^\circ$/$0.51^\circ$/$0.75^\circ$.
+\paragraph{PIGNN wins the voltage state where it trains.} $|V|$ on 17 of 20
+grids and $\theta$ on 15. Median $|V|$ RMSE $6.88\times10^{-4}$ pu against
+mirror $5.58\times10^{-3}$, mirrorpin $4.20\times10^{-3}$, graphkit
+$3.01\times10^{-3}$; median $\theta$ $0.17^\circ$ against
+$0.47^\circ$/$0.47^\circ$/$0.61^\circ$.
 
-\section{Worst-bus power-balance residual}
+\begin{landscape}
 \begin{table}[H]
 \centering\scriptsize
 \begin{tabular}{lrr rrrr rrrr}
@@ -117,7 +150,7 @@ case24\_ieee\_rts & 24 & 54\% & 2.75e-01 & 2.84e-01 & 2.32e-01 & \textbf{2.18e-0
 case14 & 14 & 64\% & 8.38e-02 & 6.00e-02 & 2.65e-02 & \textbf{1.16e-03} & 4.93e-02 & 4.40e-02 & 2.25e-02 & \textbf{1.07e-03} \\
 case118 & 118 & 54\% & 5.53e-01 & 7.28e-01 & 2.61e-01 & \textbf{4.71e-03} & 3.65e-01 & 6.04e-01 & 1.34e-01 & \textbf{5.97e-03} \\
 case9 & 9 & 67\% & 9.01e-02 & 7.61e-02 & 2.93e-02 & \textbf{1.06e-03} & 8.18e-02 & 5.20e-02 & 2.49e-02 & \textbf{9.60e-04} \\
-ENTSO\_E\_RealGridTest & 6051 & 93\% & 7.54e+01 & \textbf{1.73e+00} & 6.30e+01 & --- & 3.05e+02 & 3.22e+02 & \textbf{3.67e+01} & --- \\
+ENTSO\_E\_RealGridTest\,(16/40) & 6051 & 93\% & 7.54e+01 & \textbf{1.73e+00} & 6.30e+01 & 3.99e+01$^\dagger$ & 3.05e+02 & 3.22e+02 & \textbf{3.67e+01} & 2.41e+01$^\dagger$ \\
 case\_ieee30 & 30 & 80\% & 8.48e-02 & 1.38e-01 & 5.91e-02 & \textbf{2.14e-03} & 7.42e-02 & 7.10e-02 & 5.87e-02 & \textbf{1.47e-03} \\
 GBreducednetwork & 29 & 17\% & 4.72e+01 & 5.39e+01 & 1.52e+01 & \textbf{4.58e-02} & 2.74e+01 & 3.23e+01 & 2.38e+00 & \textbf{4.32e-02} \\
 case\_illinois200 & 200 & 81\% & 5.17e-01 & 5.59e-01 & 2.60e-01 & \textbf{1.82e-02} & 2.84e-01 & 3.39e-01 & 2.00e-01 & \textbf{1.61e-02} \\
@@ -126,39 +159,34 @@ case57 & 57 & 88\% & 2.21e-01 & 1.77e-01 & 1.49e-01 & \textbf{1.29e-02} & 1.78e-
 case33bw & 33 & 97\% & 5.09e-02 & 6.16e-02 & 2.06e-02 & \textbf{3.44e-03} & 5.92e-02 & 4.17e-02 & 1.60e-02 & \textbf{4.66e-03} \\
 case300 & 300 & 77\% & 5.52e+00 & 7.77e+00 & 1.03e+01 & \textbf{1.55e-01} & 4.85e+00 & 1.04e+01 & 6.51e+00 & \textbf{1.66e-01} \\
 iceland & 189 & 81\% & 7.46e+02 & 5.19e+02 & 1.15e+00 & \textbf{7.98e-01} & 9.78e+01 & 1.86e+02 & \textbf{8.04e-01} & 1.15e+00 \\
-case6495rte & 6495 & 92\% & \textbf{3.40e+02} & 4.92e+02 & 7.82e+02 & --- & 7.93e+02 & 7.11e+02 & \textbf{1.36e+02} & --- \\
-case6515rte & 6515 & 92\% & \textbf{2.48e+02} & 2.69e+02 & 5.08e+02 & --- & \textbf{1.41e+02} & 2.22e+02 & 1.83e+02 & --- \\
+case6495rte\,(25/40) & 6495 & 92\% & \textbf{3.40e+02} & 4.92e+02 & 7.82e+02 & 2.74e+03$^\dagger$ & 7.93e+02 & 7.11e+02 & \textbf{1.36e+02} & 1.70e+03$^\dagger$ \\
+case6515rte\,(29/40) & 6515 & 92\% & \textbf{2.48e+02} & 2.69e+02 & 5.08e+02 & 1.34e+03$^\dagger$ & \textbf{1.41e+02} & 2.22e+02 & 1.83e+02 & 8.83e+02$^\dagger$ \\
 case1354pegase & 1354 & 81\% & 4.94e+01 & 3.80e+01 & 2.90e+01 & \textbf{1.62e+00} & 1.81e+01 & 3.47e+01 & 1.72e+01 & \textbf{1.97e+00} \\
 case89pegase & 89 & 87\% & 2.46e+01 & 1.82e+01 & 1.43e+00 & \textbf{3.53e-01} & 7.71e+00 & 2.97e+01 & 1.25e+00 & \textbf{5.92e-01} \\
-case6470rte & 6470 & 93\% & \textbf{2.45e+02} & 2.63e+02 & 8.00e+02 & --- & \textbf{1.42e+02} & 1.91e+02 & 3.77e+02 & --- \\
-case2869pegase & 2869 & 82\% & 1.05e+02 & \textbf{8.38e+01} & 1.92e+02 & --- & \textbf{1.77e+01} & 1.35e+02 & 7.63e+01 & --- \\
-case3120sp & 3120 & 92\% & 4.31e+02 & \textbf{3.99e+02} & 3.28e+03 & --- & \textbf{7.91e+01} & 8.02e+01 & 9.13e+01 & --- \\
-LVN\_heo1 & 722 & 99\% & \textbf{3.33e+00} & 1.58e+04 & 6.51e+00 & 1.76e+02 & 2.34e+01 & 8.42e+03 & \textbf{5.67e+00} & 1.43e+03 \\
+case6470rte\,(23/40) & 6470 & 93\% & \textbf{2.45e+02} & 2.63e+02 & 8.00e+02 & 2.72e+03$^\dagger$ & \textbf{1.42e+02} & 1.91e+02 & 3.77e+02 & 1.18e+03$^\dagger$ \\
+case2869pegase\,(36/40) & 2869 & 82\% & 1.05e+02 & \textbf{8.38e+01} & 1.92e+02 & 1.49e+03$^\dagger$ & \textbf{1.77e+01} & 1.35e+02 & 7.63e+01 & 5.67e+02$^\dagger$ \\
+case3120sp\,(33/40) & 3120 & 92\% & 4.31e+02 & \textbf{3.99e+02} & 3.28e+03 & 2.44e+03$^\dagger$ & \textbf{7.91e+01} & 8.02e+01 & 9.13e+01 & 8.93e+02$^\dagger$ \\
+LVN\_heo1 & 722 & 99\% & \textbf{3.33e+00} & 1.58e+04 & 6.51e+00 & 1.76e+02$^\dagger$ & 2.34e+01 & 8.42e+03 & \textbf{5.67e+00} & 1.43e+03$^\dagger$ \\
 case145 & 145 & 66\% & 4.81e+01 & 3.97e+01 & 3.43e+02 & \textbf{5.77e-01} & 8.88e+00 & 9.75e+00 & 3.10e+02 & \textbf{3.38e-01} \\
-case1888rte & 1888 & 86\% & 2.64e+02 & 1.70e+02 & \textbf{1.38e+02} & 2.87e+03 & 7.10e+01 & 3.53e+02 & \textbf{5.69e+01} & 1.04e+03 \\
-case2848rte & 2848 & 87\% & 1.87e+02 & 2.03e+02 & \textbf{2.72e+01} & --- & \textbf{1.06e+02} & 2.73e+02 & 1.07e+02 & --- \\
-case9241pegase & 9241 & 84\% & 2.06e+02 & \textbf{2.03e+02} & 1.76e+03 & --- & \textbf{5.35e+01} & 4.32e+02 & 2.88e+03 & --- \\
-GBnetwork & 2224 & 83\% & 1.30e+03 & 1.06e+03 & \textbf{1.70e+02} & 1.51e+04 & 1.38e+03 & 1.74e+03 & \textbf{7.03e+01} & 3.95e+03 \\
+case1888rte & 1888 & 86\% & 2.64e+02 & 1.70e+02 & \textbf{1.38e+02} & 2.87e+03$^\dagger$ & 7.10e+01 & 3.53e+02 & \textbf{5.69e+01} & 1.04e+03$^\dagger$ \\
+case2848rte\,(34/40) & 2848 & 87\% & 1.87e+02 & 2.03e+02 & \textbf{2.72e+01} & 2.87e+03$^\dagger$ & \textbf{1.06e+02} & 2.73e+02 & 1.07e+02 & 1.03e+03$^\dagger$ \\
+case9241pegase\,(21/40) & 9241 & 84\% & 2.06e+02 & \textbf{2.03e+02} & 1.76e+03 & 1.91e+03$^\dagger$ & \textbf{5.35e+01} & 4.32e+02 & 2.88e+03 & 9.30e+02$^\dagger$ \\
+GBnetwork & 2224 & 83\% & 1.30e+03 & 1.06e+03 & \textbf{1.70e+02} & 1.51e+04$^\dagger$ & 1.38e+03 & 1.74e+03 & \textbf{7.03e+01} & 3.95e+03$^\dagger$ \\
 \bottomrule
 \end{tabular}
-\caption{$\Delta P^{\infty}$ and $\Delta Q^{\infty}$, pu on a 100 MVA base. Active power is not scored at the slack and reactive power not at slack or PV buses, where the injection is a free variable rather than a known input.}
+\caption{Worst-bus residual, pu on a 100 MVA base. Active power is not scored at the slack and reactive power not at slack or PV, where the injection is a free variable.}
 \end{table}
+\end{landscape}
 
-\paragraph{On residuals the gap is much larger than on voltage.} PIGNN takes
-$\Delta P^{\infty}$ on 20 of 23 grids and $\Delta Q^{\infty}$ on 19. Median
-$\Delta P^{\infty}$ is $1.29\times10^{-2}$ pu against graphkit's
-$2.60\times10^{-1}$, mirror's $5.17\times10^{-1}$ and mirrorpin's
-$5.59\times10^{-1}$ --- a factor of 20 against the best feed-forward model and
-40 against the worst. This is the expected shape of the result: PIGNN's
-iteration is driven by the power-balance residual itself, so it optimises
-directly what this table measures.
+\paragraph{On residuals the margin is not close.} PIGNN takes
+$\Delta P^{\infty}$ on \textbf{20 of 20} and $\Delta Q^{\infty}$ on 19. Median
+$\Delta P^{\infty}$ $4.07\times10^{-3}$ pu against graphkit's
+$1.91\times10^{-1}$, mirrorpin's $2.45\times10^{-1}$ and mirror's
+$2.48\times10^{-1}$ --- a factor of 47 against the best feed-forward model. That
+is the expected shape: PIGNN's iteration is driven by the power-balance residual
+itself, so it optimises directly what this table measures.
 
-\paragraph{graphkit is the best of the feed-forward three here.} It wins
-$\Delta Q^{\infty}$ on 4 grids to mirror's 0 and mirrorpin's 0, and its medians
-are roughly half theirs. Its \texttt{PhysicsDecoderPF} is doing something real,
-but it closes a small part of the gap to an actual iterative solver.
-
-\section{Mean power-balance residual}
+\begin{landscape}
 \begin{table}[H]
 \centering\scriptsize
 \begin{tabular}{lrr rrrr rrrr}
@@ -176,7 +204,7 @@ case24\_ieee\_rts & 24 & 54\% & 8.06e-02 & 7.76e-02 & 6.79e-02 & \textbf{7.63e-0
 case14 & 14 & 64\% & 2.55e-02 & 2.16e-02 & 8.47e-03 & \textbf{4.21e-04} & 1.97e-02 & 1.63e-02 & 8.56e-03 & \textbf{4.99e-04} \\
 case118 & 118 & 54\% & 7.20e-02 & 7.56e-02 & 4.26e-02 & \textbf{1.05e-03} & 5.34e-02 & 6.74e-02 & 2.21e-02 & \textbf{1.07e-03} \\
 case9 & 9 & 67\% & 4.00e-02 & 3.00e-02 & 1.30e-02 & \textbf{5.02e-04} & 3.64e-02 & 2.43e-02 & 1.23e-02 & \textbf{5.19e-04} \\
-ENTSO\_E\_RealGridTest & 6051 & 93\% & 6.80e-02 & \textbf{4.53e-02} & 5.16e-01 & --- & \textbf{1.88e-01} & 1.94e-01 & 2.21e-01 & --- \\
+ENTSO\_E\_RealGridTest\,(16/40) & 6051 & 93\% & 6.80e-02 & \textbf{4.53e-02} & 5.16e-01 & 1.34e-01$^\dagger$ & \textbf{1.88e-01} & 1.94e-01 & 2.21e-01 & 3.01e-01$^\dagger$ \\
 case\_ieee30 & 30 & 80\% & 2.25e-02 & 2.71e-02 & 1.42e-02 & \textbf{6.72e-04} & 1.93e-02 & 1.70e-02 & 1.59e-02 & \textbf{4.69e-04} \\
 GBreducednetwork & 29 & 17\% & 5.08e+00 & 5.62e+00 & 2.14e+00 & \textbf{1.40e-02} & 1.24e+01 & 1.45e+01 & 1.03e+00 & \textbf{1.72e-02} \\
 case\_illinois200 & 200 & 81\% & 6.20e-02 & 5.96e-02 & 3.69e-02 & \textbf{3.47e-03} & 4.63e-02 & 4.53e-02 & 3.09e-02 & \textbf{2.43e-03} \\
@@ -185,33 +213,33 @@ case57 & 57 & 88\% & 4.34e-02 & 3.89e-02 & 2.11e-02 & \textbf{2.06e-03} & 3.64e-
 case33bw & 33 & 97\% & 8.93e-03 & 1.02e-02 & 4.78e-03 & \textbf{6.76e-04} & 8.54e-03 & 7.77e-03 & 4.09e-03 & \textbf{9.56e-04} \\
 case300 & 300 & 77\% & 2.97e-01 & 3.20e-01 & 4.76e-01 & \textbf{1.23e-02} & 2.17e-01 & 2.95e-01 & 2.79e-01 & \textbf{1.24e-02} \\
 iceland & 189 & 81\% & 8.18e+00 & 5.73e+00 & 1.09e-01 & \textbf{9.59e-02} & 7.95e-01 & 1.45e+00 & \textbf{8.04e-02} & 1.36e-01 \\
-case6495rte & 6495 & 92\% & \textbf{5.93e-01} & 6.00e-01 & 1.24e+00 & --- & \textbf{3.79e-01} & 4.32e-01 & 4.38e-01 & --- \\
-case6515rte & 6515 & 92\% & \textbf{5.52e-01} & 5.88e-01 & 2.72e+00 & --- & \textbf{3.40e-01} & 3.43e-01 & 1.03e+00 & --- \\
+case6495rte\,(25/40) & 6495 & 92\% & \textbf{5.93e-01} & 6.00e-01 & 1.24e+00 & 3.63e+01$^\dagger$ & \textbf{3.79e-01} & 4.32e-01 & 4.38e-01 & 1.36e+01$^\dagger$ \\
+case6515rte\,(29/40) & 6515 & 92\% & \textbf{5.52e-01} & 5.88e-01 & 2.72e+00 & 1.42e+01$^\dagger$ & \textbf{3.40e-01} & 3.43e-01 & 1.03e+00 & 6.13e+00$^\dagger$ \\
 case1354pegase & 1354 & 81\% & 9.08e-01 & 1.12e+00 & 1.21e+00 & \textbf{8.28e-02} & 4.67e-01 & 7.82e-01 & 5.42e-01 & \textbf{1.03e-01} \\
 case89pegase & 89 & 87\% & 2.15e+00 & 1.74e+00 & 2.58e-01 & \textbf{4.80e-02} & 8.45e-01 & 1.64e+00 & 2.22e-01 & \textbf{7.08e-02} \\
-case6470rte & 6470 & 93\% & \textbf{5.31e-01} & 7.05e-01 & 4.66e+00 & --- & \textbf{3.05e-01} & 3.96e-01 & 1.71e+00 & --- \\
-case2869pegase & 2869 & 82\% & \textbf{1.23e+00} & 1.28e+00 & 4.00e+00 & --- & \textbf{3.95e-01} & 7.03e-01 & 1.53e+00 & --- \\
-case3120sp & 3120 & 92\% & 1.14e+00 & \textbf{1.10e+00} & 2.30e+00 & --- & \textbf{3.68e-01} & 4.49e-01 & 6.07e-01 & --- \\
-LVN\_heo1 & 722 & 99\% & \textbf{2.46e-02} & 2.22e+01 & 1.54e-01 & 8.34e-01 & \textbf{1.25e-01} & 1.21e+01 & 1.57e-01 & 3.51e+00 \\
+case6470rte\,(23/40) & 6470 & 93\% & \textbf{5.31e-01} & 7.05e-01 & 4.66e+00 & 3.65e+01$^\dagger$ & \textbf{3.05e-01} & 3.96e-01 & 1.71e+00 & 1.34e+01$^\dagger$ \\
+case2869pegase\,(36/40) & 2869 & 82\% & \textbf{1.23e+00} & 1.28e+00 & 4.00e+00 & 5.52e+01$^\dagger$ & \textbf{3.95e-01} & 7.03e-01 & 1.53e+00 & 1.89e+01$^\dagger$ \\
+case3120sp\,(33/40) & 3120 & 92\% & 1.14e+00 & \textbf{1.10e+00} & 2.30e+00 & 7.18e+01$^\dagger$ & \textbf{3.68e-01} & 4.49e-01 & 6.07e-01 & 2.11e+01$^\dagger$ \\
+LVN\_heo1 & 722 & 99\% & \textbf{2.46e-02} & 2.22e+01 & 1.54e-01 & 8.34e-01$^\dagger$ & \textbf{1.25e-01} & 1.21e+01 & 1.57e-01 & 3.51e+00$^\dagger$ \\
 case145 & 145 & 66\% & 4.35e+00 & 3.92e+00 & 1.91e+01 & \textbf{5.65e-02} & 1.12e+00 & 1.10e+00 & 1.84e+01 & \textbf{5.77e-02} \\
-case1888rte & 1888 & 86\% & 2.46e+00 & \textbf{1.61e+00} & 2.04e+00 & 8.33e+01 & 7.44e-01 & 1.40e+00 & \textbf{6.97e-01} & 3.11e+01 \\
-case2848rte & 2848 & 87\% & 1.19e+00 & 1.31e+00 & \textbf{7.68e-01} & --- & 6.12e-01 & 8.48e-01 & \textbf{4.20e-01} & --- \\
-case9241pegase & 9241 & 84\% & \textbf{1.68e+00} & 1.68e+00 & 1.10e+01 & --- & \textbf{4.93e-01} & 1.07e+00 & 4.03e+00 & --- \\
-GBnetwork & 2224 & 83\% & 4.39e+00 & 2.71e+00 & \textbf{1.50e+00} & 9.65e+01 & 1.21e+00 & 1.48e+00 & \textbf{6.58e-01} & 2.85e+01 \\
+case1888rte & 1888 & 86\% & 2.46e+00 & \textbf{1.61e+00} & 2.04e+00 & 8.33e+01$^\dagger$ & 7.44e-01 & 1.40e+00 & \textbf{6.97e-01} & 3.11e+01$^\dagger$ \\
+case2848rte\,(34/40) & 2848 & 87\% & 1.19e+00 & 1.31e+00 & \textbf{7.68e-01} & 6.02e+01$^\dagger$ & 6.12e-01 & 8.48e-01 & \textbf{4.20e-01} & 2.28e+01$^\dagger$ \\
+case9241pegase\,(21/40) & 9241 & 84\% & \textbf{1.68e+00} & 1.68e+00 & 1.10e+01 & 5.58e+01$^\dagger$ & \textbf{4.93e-01} & 1.07e+00 & 4.03e+00 & 1.70e+01$^\dagger$ \\
+GBnetwork & 2224 & 83\% & 4.39e+00 & 2.71e+00 & \textbf{1.50e+00} & 9.65e+01$^\dagger$ & 1.21e+00 & 1.48e+00 & \textbf{6.58e-01} & 2.85e+01$^\dagger$ \\
 \bottomrule
 \end{tabular}
-\caption{$\overline{|\Delta P|}$ and $\overline{|\Delta Q|}$, pu.}
+\caption{Mean residual, pu.}
 \end{table}
+\end{landscape}
 
-\paragraph{The mean tells the same story more starkly than the worst bus.}
-Median $\overline{|\Delta P|}$: PIGNN $2.06\times10^{-3}$, graphkit
-$4.26\times10^{-2}$, mirror $6.20\times10^{-2}$, mirrorpin $7.76\times10^{-2}$
---- a factor of 20 to 38. PIGNN wins 20 of 23 on $\overline{|\Delta P|}$ and 19
-on $\overline{|\Delta Q|}$. That the ratio is larger for the mean than for the
-worst bus says the feed-forward models are not merely failing at a few hard
-buses; they carry a residual everywhere.
+\paragraph{The mean says it more strongly than the worst bus.} PIGNN again wins
+$\overline{|\Delta P|}$ on 20 of 20; median $1.31\times10^{-3}$ against
+$2.90\times10^{-2}$ (graphkit), $5.68\times10^{-2}$ (mirror) and
+$6.76\times10^{-2}$ (mirrorpin) --- a factor of 22 to 52. That the ratio is
+larger for the mean than for the worst bus says the feed-forward models are not
+merely failing at a few hard buses; they carry a residual everywhere.
 
-\section{95th-percentile power-balance residual}
+\begin{landscape}
 \begin{table}[H]
 \centering\scriptsize
 \begin{tabular}{lrr rrrr rrrr}
@@ -229,7 +257,7 @@ case24\_ieee\_rts & 24 & 54\% & 2.31e-01 & 2.35e-01 & 1.93e-01 & \textbf{1.97e-0
 case14 & 14 & 64\% & 7.91e-02 & 5.88e-02 & 2.55e-02 & \textbf{1.13e-03} & 5.31e-02 & 4.61e-02 & 2.41e-02 & \textbf{1.35e-03} \\
 case118 & 118 & 54\% & 2.32e-01 & 2.30e-01 & 1.27e-01 & \textbf{2.64e-03} & 1.62e-01 & 2.21e-01 & 6.38e-02 & \textbf{3.09e-03} \\
 case9 & 9 & 67\% & 1.02e-01 & 8.26e-02 & 3.59e-02 & \textbf{1.26e-03} & 9.88e-02 & 6.39e-02 & 3.04e-02 & \textbf{1.27e-03} \\
-ENTSO\_E\_RealGridTest & 6051 & 93\% & \textbf{1.44e-01} & 1.58e-01 & 1.93e+00 & --- & 1.08e-01 & \textbf{8.70e-02} & 7.73e-01 & --- \\
+ENTSO\_E\_RealGridTest\,(16/40) & 6051 & 93\% & \textbf{1.44e-01} & 1.58e-01 & 1.93e+00 & 3.87e-01$^\dagger$ & 1.08e-01 & \textbf{8.70e-02} & 7.73e-01 & 1.17e+00$^\dagger$ \\
 case\_ieee30 & 30 & 80\% & 6.60e-02 & 9.13e-02 & 4.36e-02 & \textbf{1.73e-03} & 5.70e-02 & 5.22e-02 & 4.83e-02 & \textbf{1.23e-03} \\
 GBreducednetwork & 29 & 17\% & 2.65e+01 & 2.74e+01 & 6.24e+00 & \textbf{3.60e-02} & 3.50e+01 & 4.16e+01 & 2.93e+00 & \textbf{5.30e-02} \\
 case\_illinois200 & 200 & 81\% & 2.17e-01 & 2.13e-01 & 1.14e-01 & \textbf{9.15e-03} & 1.37e-01 & 1.34e-01 & 1.02e-01 & \textbf{6.44e-03} \\
@@ -238,42 +266,26 @@ case57 & 57 & 88\% & 1.43e-01 & 1.22e-01 & 6.47e-02 & \textbf{6.90e-03} & 1.17e-
 case33bw & 33 & 97\% & 3.10e-02 & 3.55e-02 & 1.44e-02 & \textbf{2.03e-03} & 2.76e-02 & 2.51e-02 & 1.25e-02 & \textbf{3.34e-03} \\
 case300 & 300 & 77\% & 9.95e-01 & 9.92e-01 & 1.75e+00 & \textbf{3.77e-02} & 7.06e-01 & 8.96e-01 & 9.65e-01 & \textbf{4.01e-02} \\
 iceland & 189 & 81\% & 8.99e-01 & 8.44e-01 & 4.42e-01 & \textbf{3.10e-01} & 5.30e-01 & 8.93e-01 & \textbf{2.93e-01} & 4.28e-01 \\
-case6495rte & 6495 & 92\% & 1.62e+00 & \textbf{1.58e+00} & 3.54e+00 & --- & \textbf{6.71e-01} & 8.26e-01 & 1.49e+00 & --- \\
-case6515rte & 6515 & 92\% & 1.51e+00 & \textbf{1.50e+00} & 9.78e+00 & --- & 9.56e-01 & \textbf{8.27e-01} & 3.88e+00 & --- \\
+case6495rte\,(25/40) & 6495 & 92\% & 1.62e+00 & \textbf{1.58e+00} & 3.54e+00 & 1.60e+02$^\dagger$ & \textbf{6.71e-01} & 8.26e-01 & 1.49e+00 & 6.16e+01$^\dagger$ \\
+case6515rte\,(29/40) & 6515 & 92\% & 1.51e+00 & \textbf{1.50e+00} & 9.78e+00 & 6.60e+01$^\dagger$ & 9.56e-01 & \textbf{8.27e-01} & 3.88e+00 & 2.72e+01$^\dagger$ \\
 case1354pegase & 1354 & 81\% & 3.26e+00 & 4.19e+00 & 3.97e+00 & \textbf{2.64e-01} & 1.58e+00 & 2.63e+00 & 1.91e+00 & \textbf{2.78e-01} \\
 case89pegase & 89 & 87\% & 1.01e+01 & 7.37e+00 & 7.74e-01 & \textbf{1.44e-01} & 3.30e+00 & 5.50e+00 & 7.87e-01 & \textbf{2.86e-01} \\
-case6470rte & 6470 & 93\% & \textbf{1.56e+00} & 2.14e+00 & 1.71e+01 & --- & \textbf{8.75e-01} & 1.14e+00 & 5.98e+00 & --- \\
-case2869pegase & 2869 & 82\% & \textbf{4.08e+00} & 4.23e+00 & 1.48e+01 & --- & \textbf{1.29e+00} & 2.05e+00 & 5.95e+00 & --- \\
-case3120sp & 3120 & 92\% & \textbf{2.27e+00} & 2.31e+00 & 4.41e+00 & --- & \textbf{9.14e-01} & 1.33e+00 & 1.84e+00 & --- \\
-LVN\_heo1 & 722 & 99\% & \textbf{4.42e-02} & 8.39e-02 & 4.60e-01 & 5.97e-02 & \textbf{3.21e-01} & 3.43e-01 & 4.61e-01 & 1.29e+00 \\
+case6470rte\,(23/40) & 6470 & 93\% & \textbf{1.56e+00} & 2.14e+00 & 1.71e+01 & 1.61e+02$^\dagger$ & \textbf{8.75e-01} & 1.14e+00 & 5.98e+00 & 6.13e+01$^\dagger$ \\
+case2869pegase\,(36/40) & 2869 & 82\% & \textbf{4.08e+00} & 4.23e+00 & 1.48e+01 & 2.62e+02$^\dagger$ & \textbf{1.29e+00} & 2.05e+00 & 5.95e+00 & 8.78e+01$^\dagger$ \\
+case3120sp\,(33/40) & 3120 & 92\% & \textbf{2.27e+00} & 2.31e+00 & 4.41e+00 & 2.35e+02$^\dagger$ & \textbf{9.14e-01} & 1.33e+00 & 1.84e+00 & 7.35e+01$^\dagger$ \\
+LVN\_heo1 & 722 & 99\% & \textbf{4.42e-02} & 8.39e-02 & 4.60e-01 & 5.97e-02$^\dagger$ & \textbf{3.21e-01} & 3.43e-01 & 4.61e-01 & 1.29e+00$^\dagger$ \\
 case145 & 145 & 66\% & 1.69e+01 & 1.56e+01 & 7.34e+01 & \textbf{1.54e-01} & 4.16e+00 & 4.03e+00 & 7.07e+01 & \textbf{1.63e-01} \\
-case1888rte & 1888 & 86\% & 4.91e+00 & \textbf{4.08e+00} & 7.50e+00 & 4.53e+02 & \textbf{2.24e+00} & 3.27e+00 & 2.31e+00 & 1.57e+02 \\
-case2848rte & 2848 & 87\% & 3.75e+00 & 3.80e+00 & \textbf{2.92e+00} & --- & 1.65e+00 & 2.02e+00 & \textbf{1.17e+00} & --- \\
-case9241pegase & 9241 & 84\% & \textbf{5.23e+00} & 5.54e+00 & 3.71e+01 & --- & \textbf{1.60e+00} & 2.96e+00 & 1.23e+01 & --- \\
-GBnetwork & 2224 & 83\% & 3.98e+00 & \textbf{3.78e+00} & 5.57e+00 & 3.66e+02 & \textbf{1.49e+00} & 2.02e+00 & 2.27e+00 & 1.07e+02 \\
+case1888rte & 1888 & 86\% & 4.91e+00 & \textbf{4.08e+00} & 7.50e+00 & 4.53e+02$^\dagger$ & \textbf{2.24e+00} & 3.27e+00 & 2.31e+00 & 1.57e+02$^\dagger$ \\
+case2848rte\,(34/40) & 2848 & 87\% & 3.75e+00 & 3.80e+00 & \textbf{2.92e+00} & 3.15e+02$^\dagger$ & 1.65e+00 & 2.02e+00 & \textbf{1.17e+00} & 1.16e+02$^\dagger$ \\
+case9241pegase\,(21/40) & 9241 & 84\% & \textbf{5.23e+00} & 5.54e+00 & 3.71e+01 & 3.00e+02$^\dagger$ & \textbf{1.60e+00} & 2.96e+00 & 1.23e+01 & 8.67e+01$^\dagger$ \\
+GBnetwork & 2224 & 83\% & 3.98e+00 & \textbf{3.78e+00} & 5.57e+00 & 3.66e+02$^\dagger$ & \textbf{1.49e+00} & 2.02e+00 & 2.27e+00 & 1.07e+02$^\dagger$ \\
 \bottomrule
 \end{tabular}
-\caption{p95$|\Delta P|$ and p95$|\Delta Q|$, pu. Read against Section 3: where the mean exceeds p95, the distribution is carried by a handful of extreme buses and neither statistic alone describes it.}
+\caption{95th-percentile residual, pu. Read against the mean table: where the mean exceeds p95, the distribution is carried by a handful of extreme buses.}
 \end{table}
+\end{landscape}
 
-\paragraph{Heavy tails, and they are not PIGNN's.} On several grids the mean in
-Section 3 exceeds the p95 here --- iceland under mirror
-($\overline{|\Delta P|} = 8.18$ against p95 $= 0.899$) and GBnetwork
-($4.39$ against $3.98$). That ordering is only possible when a few buses carry
-residuals orders of magnitude above the rest. Reporting a mean alone hides it and
-reporting $\Delta P^{\infty}$ alone makes the whole grid look broken when a
-handful of buses are. Both columns are needed, which is why both are here.
-
-\section{Collapse diagnostic: slope and $R^2$}
-
-Pooled regression of predicted against reference $|V|$, \textbf{restricted to PQ
-buses}. Slope~1 means the model tracks the reference spread one-for-one; slope
-well below~1 means it is collapsing toward the mean voltage while still posting a
-small MAE, which is a failure mode neither RMSE nor MAE can see. The PQ
-restriction matters: three of the four implementations copy $|V|$ through
-unchanged at PV and slack, where prediction equals reference exactly, so a pooled
-regression over all buses is dragged toward~1 for reasons unrelated to modelling.
-
+\begin{landscape}
 \begin{table}[H]
 \centering\scriptsize
 \begin{tabular}{lrr rrrr rrrr}
@@ -291,7 +303,7 @@ case24\_ieee\_rts & 24 & 54\% & 0.984 & 0.984 & 0.976 & 1.001 & 0.995 & 0.995 & 
 case14 & 14 & 64\% & 0.952 & 0.995 & 0.993 & 0.999 & 0.990 & 0.992 & 0.998 & 1.000 \\
 case118 & 118 & 54\% & 0.986 & 0.985 & 0.979 & 0.999 & 0.987 & 0.990 & 0.994 & 1.000 \\
 case9 & 9 & 67\% & 0.962 & 0.968 & 0.986 & 1.000 & 0.979 & 0.993 & 0.999 & 1.000 \\
-ENTSO\_E\_RealGridTest & 6051 & 93\% & 0.999 & 0.999 & 0.538 & --- & 0.996 & 0.996 & 0.504 & --- \\
+ENTSO\_E\_RealGridTest\,(16/40) & 6051 & 93\% & 0.999 & 0.999 & 0.538 & --- & 0.996 & 0.996 & 0.504 & --- \\
 case\_ieee30 & 30 & 80\% & 0.987 & 0.976 & 0.934 & 1.012 & 0.975 & 0.983 & 0.971 & 0.999 \\
 GBreducednetwork & 29 & 17\% & 1.139 & 0.391 & 0.943 & 0.999 & 0.089 & 0.030 & 0.948 & 1.000 \\
 case\_illinois200 & 200 & 81\% & 0.898 & 0.933 & 0.860 & 0.964 & 0.915 & 0.935 & 0.883 & 0.994 \\
@@ -300,100 +312,66 @@ case57 & 57 & 88\% & 0.997 & 1.015 & 0.974 & 0.841 & 0.993 & 0.992 & 0.994 & 0.9
 case33bw & 33 & 97\% & 0.865 & 0.879 & 0.882 & 0.856 & 0.888 & 0.889 & 0.916 & 0.923 \\
 case300 & 300 & 77\% & 0.929 & 0.871 & 0.712 & 0.677 & 0.932 & 0.926 & 0.750 & 0.721 \\
 iceland & 189 & 81\% & 0.891 & 0.912 & 0.838 & 0.207 & 0.901 & 0.909 & 0.890 & 0.292 \\
-case6495rte & 6495 & 92\% & 0.831 & 0.855 & 0.146 & --- & 0.891 & 0.898 & 0.157 & --- \\
-case6515rte & 6515 & 92\% & 0.684 & 0.831 & 0.187 & --- & 0.747 & 0.866 & 0.085 & --- \\
+case6495rte\,(25/40) & 6495 & 92\% & 0.831 & 0.855 & 0.146 & --- & 0.891 & 0.898 & 0.157 & --- \\
+case6515rte\,(29/40) & 6515 & 92\% & 0.684 & 0.831 & 0.187 & --- & 0.747 & 0.866 & 0.085 & --- \\
 case1354pegase & 1354 & 81\% & 0.341 & 0.451 & 0.352 & 0.626 & 0.440 & 0.578 & 0.367 & 0.760 \\
 case89pegase & 89 & 87\% & 0.396 & 0.471 & 0.696 & 0.830 & 0.496 & 0.587 & 0.809 & 0.952 \\
-case6470rte & 6470 & 93\% & 0.735 & 0.770 & 0.383 & --- & 0.763 & 0.799 & 0.167 & --- \\
-case2869pegase & 2869 & 82\% & 0.342 & 0.461 & 0.254 & --- & 0.455 & 0.548 & 0.159 & --- \\
-case3120sp & 3120 & 92\% & 0.193 & 0.456 & 0.298 & --- & 0.264 & 0.562 & 0.232 & --- \\
-LVN\_heo1 & 722 & 99\% & 0.214 & 0.491 & 0.494 & 0.000 & 0.225 & 0.478 & 0.493 & 0.000 \\
+case6470rte\,(23/40) & 6470 & 93\% & 0.735 & 0.770 & 0.383 & --- & 0.763 & 0.799 & 0.167 & --- \\
+case2869pegase\,(36/40) & 2869 & 82\% & 0.342 & 0.461 & 0.254 & --- & 0.455 & 0.548 & 0.159 & --- \\
+case3120sp\,(33/40) & 3120 & 92\% & 0.193 & 0.456 & 0.298 & --- & 0.264 & 0.562 & 0.232 & --- \\
+LVN\_heo1 & 722 & 99\% & 0.214 & 0.491 & 0.494 & 0.000$^\dagger$ & 0.225 & 0.478 & 0.493 & 0.000$^\dagger$ \\
 case145 & 145 & 66\% & 0.672 & 0.704 & -0.199 & 0.829 & 0.761 & 0.772 & 0.008 & 0.889 \\
-case1888rte & 1888 & 86\% & 0.228 & 0.378 & 0.228 & 0.000 & 0.393 & 0.545 & 0.272 & 0.000 \\
-case2848rte & 2848 & 87\% & 0.562 & 0.487 & 0.337 & --- & 0.676 & 0.630 & 0.455 & --- \\
-case9241pegase & 9241 & 84\% & 0.492 & 0.537 & 0.512 & --- & 0.572 & 0.609 & 0.151 & --- \\
-GBnetwork & 2224 & 83\% & 0.739 & 0.746 & 0.549 & 0.000 & 0.825 & 0.805 & 0.591 & 0.000 \\
+case1888rte & 1888 & 86\% & 0.228 & 0.378 & 0.228 & 0.000$^\dagger$ & 0.393 & 0.545 & 0.272 & 0.000$^\dagger$ \\
+case2848rte\,(34/40) & 2848 & 87\% & 0.562 & 0.487 & 0.337 & --- & 0.676 & 0.630 & 0.455 & --- \\
+case9241pegase\,(21/40) & 9241 & 84\% & 0.492 & 0.537 & 0.512 & --- & 0.572 & 0.609 & 0.151 & --- \\
+GBnetwork & 2224 & 83\% & 0.739 & 0.746 & 0.549 & 0.000$^\dagger$ & 0.825 & 0.805 & 0.591 & 0.000$^\dagger$ \\
 \bottomrule
 \end{tabular}
-\caption{Unlike the other four families, slope and $R^2$ are not written to the
-training logs; they come from a separate inference pass over the saved
-checkpoints. That pass covers 31/31 for the three GridFM variants and
-\textbf{23/31 for PIGNN}, matching its training coverage.}
+\caption{Collapse diagnostic, PQ buses only. Slope~1 means the model tracks the reference spread one-for-one; well below~1 means it is collapsing toward the mean voltage while still posting a small MAE.}
 \end{table}
+\end{landscape}
 
-\paragraph{On aggregate PIGNN tracks best --- and that hides the more
-interesting result.} Over the 23 grids all four now have, PIGNN has the best
-median PQ slope, 0.995 against mirror 0.952, graphkit 0.934 and mirrorpin 0.933,
-and it is closest to slope~1 on 16 of 23. But the count of \emph{collapsed} grids
-is the same for everyone: slope below 0.9 on 10 of 23 for PIGNN, 10 for mirror,
-10 for mirrorpin, 11 for graphkit; below 0.5 on 4, 4, 5 and 4 respectively.
-\textbf{PIGNN is better on the grids that were already fine and no better at
-avoiding collapse.}
+\paragraph{PIGNN tracks best overall but is not immune, and it fails on
+different grids.} Over the 20, PIGNN has the best median PQ slope, 0.998 against
+mirrorpin 0.972, mirror 0.962, graphkit 0.959, and is closest to slope~1 on 16
+of 20. Grids below slope 0.9 are 7 for PIGNN against 7/7/8 --- the same count.
+Below 0.5 it is 1 against 2/3/2.
 
-\paragraph{Where the feed-forward models collapse, PIGNN either fixes it or
-fails completely.} The four grids where mirror falls below slope 0.5:
+Where it differs is \emph{which} grids fail. On the two where the GridFM
+variants collapse hardest it is clearly better: case1354pegase 0.626 against
+0.341/0.451/0.352, case89pegase 0.830 against 0.396/0.471/0.696. But it has a
+failure of its own that none of them share --- \textbf{iceland at 0.207, where
+mirror sits at 0.891} --- and case300 at 0.677 against mirror's 0.929. The
+collapse is not a property of the feed-forward architecture that iteration
+cures; each approach has its own hard grids.
 
-\begin{table}[H]
-\centering\small
-\begin{tabular}{lrrrr}
-\toprule
-PQ-only $|V|$ slope & mirror & mirrorpin & graphkit & pignn \\
-\midrule
-LVN\_heo1      & 0.214 & 0.491 & 0.494 & \textbf{0.000} \\
-case1888rte    & 0.228 & 0.378 & 0.228 & \textbf{0.000} \\
-case1354pegase & 0.341 & 0.451 & 0.352 & \textbf{0.626} \\
-case89pegase   & 0.396 & 0.471 & 0.696 & \textbf{0.830} \\
-\bottomrule
-\end{tabular}
-\end{table}
+\paragraph{Two pathologies only the slope separates.} graphkit reaches a
+\emph{negative} slope on case145, $-0.199$: its prediction is anti-correlated
+with the reference, which no error magnitude distinguishes from a merely weak
+fit. And mirror on GBreducednetwork sits at 1.139 with $R^2 = 0.089$ --- it
+produces more spread than the reference and the excess is uncorrelated with it,
+which is amplitude inflation rather than collapse. PIGNN handles that grid at
+0.999.
 
-On two of them PIGNN is the best of the four by a clear margin. On the other two
-its slope is \textbf{exactly zero}: on PQ buses --- the only buses it predicts
---- it emits a constant. $R^2$ is 0.000 there too, and the predicted standard
-deviation collapses to 7\% of the reference's on LVN\_heo1. This is not a
-degraded fit, it is no fit at all.
 
-\paragraph{The RMSE table does not hide it here, which is luck rather than
-design.} On those two grids PIGNN is also the \emph{worst} of the four on $|V|$
-RMSE --- $5.10\times10^{-2}$ on LVN\_heo1 against $2.2$--$2.7\times10^{-2}$, and
-$6.60\times10^{-2}$ on case1888rte against $2.5$--$3.1\times10^{-2}$ --- so a
-reader looking only at Section 1 would have flagged them anyway. That alignment
-is not guaranteed: a constant predictor sits near the mean voltage, and on a grid
-with a narrower voltage spread it would post a competitive RMSE while carrying no
-information. The slope is what distinguishes the two cases, and it is the reason
-this table exists.
+\section{Caveats}
 
-\paragraph{So the open question has an answer, and it is not the flattering
-one.} PIGNN's iteration does not confer immunity to the collapse. It converts it
-into a sharper, more bimodal outcome: markedly better than the feed-forward
-models on two of the four hard grids, and a total failure on the other two.
+\paragraph{Single seed.} Every number is one run. The same configuration has
+given $1.040\times10^{-3}$ and $4.300\times10^{-3}$ on case14 across clusters,
+so differences below roughly a factor of two should not be read as real. PIGNN's
+residual margins are far larger than that; the differences among the three
+GridFM variants frequently are not.
 
-\paragraph{Coverage.} 23 of 31 for PIGNN; the eight still training are
-ENTSO\_E\_RealGridTest, case2848rte, case2869pegase, case3120sp, case6470rte,
-case6495rte, case6515rte and case9241pegase --- all large, and three of them
-(case3120sp at mirror slope 0.19, case9241pegase 0.49, case2869pegase 0.34) are
-themselves collapse cases. The 2-for-2 split above is therefore over a small
-sample and could move either way.
+\paragraph{case145 is not comparable} on any row: 7885 scenarios against about
+36{,}000 for the rest. A regeneration is outstanding.
 
-\paragraph{How the PIGNN scores were validated.} The inference path had to be
-established against the training logs rather than read off defaults, because
-\texttt{GNSMsg\_EdgeSelfAttn} takes a dozen constructor arguments that change the
-forward pass but are not stored in the checkpoint --- so a wrong value loads with
-a perfectly matching \texttt{state\_dict} and silently computes a different
-function. Three had to be corrected: \texttt{use\_armijo} (the decisive one),
-\texttt{v\_limit}, and the missing \texttt{n\_nodes\_per\_graph} argument. With
-\texttt{use\_armijo} off the model returned $|V|$ RMSE $2.05\times10^{-1}$
-against a logged $8.76\times10^{-4}$, a factor of 234, with no error raised.
+\paragraph{Scenario counts are not uniform.} case9241pegase 18{,}280,
+case6515rte 20{,}135, case6495rte 23{,}332, case6470rte 25{,}551, case300
+27{,}994, case1354pegase 32{,}627, GBnetwork 34{,}424, iceland 35{,}605.
 
-The 23 scores reproduce their training runs to within \textbf{0.7\%
-relative}, median 0.006\%. That is looser than the $2\times10^{-4}$ the GridFM
-re-scores achieve, and the reason is structural: PIGNN runs 40 solver iterations
-in float32, so ordinary GPU non-determinism compounds where a single forward pass
-does not. It is agreement to three significant figures, not an unexplained
-discrepancy.
-
-\paragraph{The same trap applies to \texttt{predict\_pignn.py}} --- it omits
-\texttt{n\_nodes\_per\_graph}, so figures taken from it should be re-checked
-against a training log before use.
+\paragraph{The eleven dead PIGNN runs need re-running before any large-grid
+claim.} Nine of the eleven are the corpus's largest grids, so the 20-grid
+aggregate describes the small and mid-size regime. Nothing here supports a
+statement about PIGNN on large transmission networks.
 
 \end{document}
