@@ -60,8 +60,13 @@ for g in "${SELECTED[@]}"; do
   # best_model.ckpt whenever validation improves -- so its presence does NOT
   # mean the run finished. Gate on the training log's test block instead;
   # scoring a mid-training snapshot would produce numbers that look final.
-  fin="$(retry ssh "${HOST}" "grep -alc 'Test physics-loss' '${LOG_DIR}'/pf_pignn_${g}_b*_training_log.txt 2>/dev/null | head -1")"
-  if [ -z "${fin}" ]; then skipped="${skipped} ${g}"; continue; fi
+  # ALLOW_UNFINISHED=1 deliberately scores checkpoints from runs the wall clock
+  # killed, so their row can carry a test-split number instead of validation.
+  # Off by default: a mid-training snapshot scored silently reads as final.
+  if [ "${ALLOW_UNFINISHED:-0}" != "1" ]; then
+    fin="$(retry ssh "${HOST}" "grep -alc 'Test physics-loss' '${LOG_DIR}'/pf_pignn_${g}_b*_training_log.txt 2>/dev/null | head -1")"
+    if [ -z "${fin}" ]; then skipped="${skipped} ${g}"; continue; fi
+  fi
   ck="$(retry ssh "${HOST}" "ls '${CKPT_DIR}' 2>/dev/null | grep -E '_${g}_b[0-9]+_[0-9]+_best_model\\.ckpt$' | head -1")"
   if [ -z "${ck}" ]; then skipped="${skipped} ${g}"; continue; fi
   # sed -E, not \+: BSD sed on the submitting machine does not support \+ and
