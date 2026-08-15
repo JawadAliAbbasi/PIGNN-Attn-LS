@@ -176,6 +176,10 @@ def parse_args():
         default="logcosh",
     )
     parser.add_argument("--physics_huber_delta", type=float, default=1.0)
+    parser.add_argument(
+        "--pf_injection", choices=("signed", "legacy"), default="signed",
+        help="signed: carry the net PQ-bus injection with its sign (correct). "
+             "legacy: clamp it at zero, reproducing the first campaign.")
     parser.add_argument("--residual_tol_pu", type=float, default=1e-6)
     parser.add_argument("--convergence_tol_pu", type=float, default=1e-6)
     parser.add_argument("--vmin", type=float, default=0.5)
@@ -276,6 +280,16 @@ def make_lumina_graphs(batch_cpu: Dict[str, torch.Tensor], args,
         vn_kv = batch_cpu["vn_kv"].squeeze(0)[bs].float()
         Vstart = batch_cpu["V_start"].squeeze(0)[bs].float()
         S = batch_cpu["S_start"].squeeze(0)[bs].to(torch.complex128)
+        # Reactive power at slack/PV buses is not a specified quantity: the
+        # solver fixes |V| there and solves for Q, so whatever sits in that slot
+        # is arbitrary. CGMES exports park reactive-capability figures there --
+        # LVN heo1 carries Q = -2507 pu at one 380 kV PV bus against a true
+        # maximum of 8.4 pu. Left in, it reaches the generator node (as absurd
+        # q_min/q_max) and, because |Q| > 0 passes the load selector below, also
+        # invents a 2507 pu reactive load that does not exist. Zero it here so
+        # the node features match how the physics loss already treats it.
+        _q_not_specified = (bus_type_ppc == 1) | (bus_type_ppc == 2)
+        S = torch.complex(S.real, S.imag.masked_fill(_q_not_specified, 0.0))
         Ysh = batch_cpu["Y_shunt_bus"].squeeze(0)[bs].to(torch.complex128)
 
         d = HeteroData()
@@ -333,11 +347,27 @@ def make_lumina_graphs(batch_cpu: Dict[str, torch.Tensor], args,
         d["generator", "generator_link", "bus"].edge_index = torch.stack([gen_idx, gen_bus], dim=0)
         d["bus", "generator_link", "generator"].edge_index = torch.stack([gen_bus, gen_idx], dim=0)
 
-        load_bus = torch.where(((-S.real).abs() > 0) | ((-S.imag).abs() > 0))[0]
+        if opf_space is not None or args.pf_injection == "legacy":
+            load_bus = torch.where(((-S.real).abs() > 0) | ((-S.imag).abs() > 0))[0]
+            pd_ = torch.clamp(-S.real[load_bus].float(), min=0.0)
+            qd_ = torch.clamp(-S.imag[load_bus].float(), min=0.0)
+        else:
+        # PF: S is the net injection and the only statement of what the scenario
+        # asks for. Clamping it at zero deleted every bus whose net injection is
+        # positive -- 55.5% of SimBench's PQ buses, carrying 99.7% of the
+        # active-power magnitude on them -- while the physics loss still scored
+        # the prediction against the true S. The model was being asked for a
+        # voltage state determined by inputs it never saw. Carry the injection
+        # signed, and only on PQ buses: at PV and slack the generator node
+        # already encodes it, so a load node there would double count.
+            is_pq = (bus_type_ppc != 1) & (bus_type_ppc != 2)
+            load_bus = torch.where(is_pq & ((S.real.abs() > 0) | (S.imag.abs() > 0)))[0]
+            pd_ = -S.real[load_bus].float()
+            qd_ = -S.imag[load_bus].float()
         xl = torch.zeros((load_bus.numel(), LUMINA_NODE_DIMS["load"]), dtype=torch.float32)
         if load_bus.numel() > 0:
-            xl[:, 0] = torch.clamp(-S.real[load_bus].float(), min=0.0)
-            xl[:, 1] = torch.clamp(-S.imag[load_bus].float(), min=0.0)
+            xl[:, 0] = pd_
+            xl[:, 1] = qd_
         d["load"].x = xl
         li = torch.arange(load_bus.numel(), dtype=torch.long)
         d["load", "load_link", "bus"].edge_index = torch.stack([li, load_bus], dim=0)
