@@ -102,6 +102,11 @@ def parse_args():
     )
     parser.add_argument("--PARQUET", type=str, required=True)
     parser.add_argument(
+        "--zero_unspecified_q", action="store_true",
+        help="Zero the reactive injection at slack/PV, where it is not a "
+             "specified quantity, instead of feeding the parquet's arbitrary "
+             "value as a bus feature.")
+    parser.add_argument(
         "--pin_known",
         action="store_true",
         help="Power flow only: hold |V| at PV/slack and the angle at the slack "
@@ -118,14 +123,16 @@ def parse_args():
     )
     parser.add_argument(
         "--gridfm_impl",
-        choices=("mirror", "graphkit", "graphkit_ls", "graphkit_inc"),
+        choices=("mirror", "graphkit", "graphkit_ls", "graphkit_inc", "graphkit_projected"),
         default="mirror",
         help="mirror: the local GridFMHeteroSurrogate. graphkit: the released "
              "gridfm_graphkit GNS_heterogeneous, which adds per-layer physics "
              "feedback and a PhysicsDecoderPF. graphkit_ls: the same backbone "
              "with the per-layer decoder read as a state-space increment and "
              "scaled by an Armijo line search. graphkit_inc: the increment "
-             "without the line search, which separates the two changes. None "
+             "without the line search, which separates the two changes. "
+             "graphkit_projected fuses each layer's learned increment with an "
+             "exact DPF/Adam direction, descent projection, and per-grid Armijo. None "
              "has published weights, so all are scratch-only.",
     )
     parser.add_argument(
@@ -217,6 +224,16 @@ def parse_args():
     parser.add_argument("--convergence_tol_pu", type=float, default=1e-6)
     parser.add_argument("--vmin", type=float, default=0.5)
     parser.add_argument("--vmax", type=float, default=1.5)
+    parser.add_argument("--projected_dpf_lr", type=float, default=0.003377)
+    parser.add_argument("--projected_dpf_beta1", type=float, default=0.979681)
+    parser.add_argument("--projected_dpf_beta2", type=float, default=0.963442)
+    parser.add_argument("--projected_dpf_mu", type=float, default=1e-4)
+    parser.add_argument("--projected_dpf_max_vm_fraction", type=float, default=0.10)
+    parser.add_argument("--projected_dpf_max_angle_step", type=float, default=0.30)
+    parser.add_argument(
+        "--projected_dpf_first_order", action="store_true",
+        help="Detach inner mismatch gradients to avoid second derivatives; ablation only.",
+    )
     add_known_operator_args(parser)
     return parser.parse_args()
 
@@ -594,7 +611,8 @@ def make_branch_edge_features(batch, dtype=torch.float32, feature_transform="sig
     return edge_index, edge_attr
 
 
-def make_gridfm_inputs(batch, device, vn_feature_mode, feature_transform, opf_space=None):
+def make_gridfm_inputs(batch, device, vn_feature_mode, feature_transform,
+                       opf_space=None, zero_unspecified_q=False):
     bus_type = batch["bus_type"].to(device)
     Vstart = batch["V_start"].to(device).float()
     Vnewton = batch["V_newton"].to(device).float()
@@ -615,6 +633,15 @@ def make_gridfm_inputs(batch, device, vn_feature_mode, feature_transform, opf_sp
     # convention; the actual training/eval physics still uses S_start directly.
     p_in = -S.real
     q_in = -S.imag
+    if zero_unspecified_q:
+        # Reactive power is not a specified quantity at slack or PV: the solver
+        # fixes |V| there and solves for Q, so whatever the parquet carries in
+        # that slot is arbitrary. LVN_heo1 parks CGMES reactive-capability
+        # figures there -- up to 2626 pu against a true maximum of about 8 --
+        # and the GridSFM and LUMINA drivers already zero it for exactly this
+        # reason. Off by default so the first campaign stays reproducible.
+        _q_free = (bt == 1) | (bt == 2)
+        q_in = q_in.masked_fill(_q_free, 0.0)
     if feature_transform == "signed_log":
         p_in = signed_log1p(p_in)
         q_in = signed_log1p(q_in)
@@ -868,6 +895,11 @@ def run():
             "--kol_pf_mode is an AC power-flow feasibility operator and cannot "
             "be applied to --task opf, where generator dispatch is a decision."
         )
+    if args.gridfm_impl == "graphkit_projected" and args.kol_pf_mode != "off":
+        raise ValueError(
+            "graphkit_projected already contains the DPF known operator inside "
+            "every layer; appending --kol_pf_mode dpf would attach a second solver."
+        )
 
     if not args.run_name:
         args.run_name = (
@@ -951,6 +983,24 @@ def run():
                 num_layers=args.num_layers,
                 attention_head=args.n_heads,
             ).to(device)
+        elif args.gridfm_impl == "graphkit_projected":
+            if is_opf:
+                raise SystemExit("--gridfm_impl graphkit_projected is power-flow only")
+            from gridfm_projected_dpf_hybrid import GNS_heterogeneous_ProjectedDPF
+            model = GNS_heterogeneous_ProjectedDPF(
+                make_args("PowerFlow", args.hidden_size, args.num_layers,
+                          args.n_heads, args.dropout),
+                dpf_lr=args.projected_dpf_lr,
+                beta1=args.projected_dpf_beta1,
+                beta2=args.projected_dpf_beta2,
+                descent_mu=args.projected_dpf_mu,
+                armijo_max_backtracks=args.armijo_max_backtracks,
+                vmin=args.vmin,
+                vmax=args.vmax,
+                max_vm_fraction=args.projected_dpf_max_vm_fraction,
+                max_angle_step=args.projected_dpf_max_angle_step,
+                first_order=args.projected_dpf_first_order,
+            ).to(device)
         else:
             if is_opf:
                 raise SystemExit(
@@ -1021,6 +1071,13 @@ def run():
         kol_final_values = []
         kol_converged_values = []
         kol_iteration_values = []
+        projected_accepted = 0
+        projected_steps = 0
+        projected_monotonic_violations = 0
+        projected_max_cost_increase = 0.0
+        projected_initial_cost = 0.0
+        projected_final_cost = 0.0
+        projected_graphs = 0
 
         with torch.set_grad_enabled(train):
             for batch in loader:
@@ -1067,6 +1124,7 @@ def run():
                     args.vn_feature_mode,
                     args.feature_transform,
                     opf_space=space_dev,
+                    zero_unspecified_q=args.zero_unspecified_q,
                 )
                 if args.gridfm_impl.startswith("graphkit"):
                     from gridfm_graphkit_adapter import forward_graphkit_parquet
@@ -1079,6 +1137,28 @@ def run():
                     )
                 else:
                     Vraw = model(x_dict, edge_index_dict, edge_attr_dict)
+
+                if args.gridfm_impl == "graphkit_projected" and model.cost_history:
+                    costs = [model.initial_cost] + model.cost_history
+                    projected_accepted += sum(
+                        int((alpha > 0).sum().item()) for alpha in model.alpha_history
+                    )
+                    projected_steps += sum(alpha.numel() for alpha in model.alpha_history)
+                    for before, after in zip(costs[:-1], costs[1:]):
+                        increase = after - before
+                        tolerance = 1e-7 * torch.maximum(
+                            before.abs(), torch.ones_like(before)
+                        )
+                        projected_monotonic_violations += int(
+                            (increase > tolerance).sum().item()
+                        )
+                        projected_max_cost_increase = max(
+                            projected_max_cost_increase,
+                            float(increase.max().item()),
+                        )
+                    projected_initial_cost += float(costs[0].sum().item())
+                    projected_final_cost += float(costs[-1].sum().item())
+                    projected_graphs += costs[0].numel()
 
                 kol_diag = None
                 if known_operator is not None:
@@ -1196,6 +1276,15 @@ def run():
                 "converged": torch.cat(kol_converged_values),
                 "iterations": torch.cat(kol_iteration_values),
             }
+        projected_summary = None
+        if projected_steps:
+            projected_summary = {
+                "accepted_rate": projected_accepted / projected_steps,
+                "monotonic_violations": projected_monotonic_violations,
+                "max_cost_increase": projected_max_cost_increase,
+                "initial_cost": projected_initial_cost / max(projected_graphs, 1),
+                "final_cost": projected_final_cost / max(projected_graphs, 1),
+            }
         return {
             "loss": sum_loss / denom,
             "mse": sum_mse / denom,
@@ -1209,6 +1298,7 @@ def run():
             "dist": dist,
             "opf": {k: v / denom for k, v in opf_sums.items()} if opf_sums else None,
             "kol": kol_summary,
+            "projected": projected_summary,
         }
 
     def fmt(prefix, m):
@@ -1221,12 +1311,22 @@ def run():
                 f"rmse {rmse:.4e} (mag {rmse_mag:.4e}, ang {rmse_ang_deg:.4e}deg) "
                 f"{format_opf_metrics(m['opf'])}"
             )
+        projected_text = ""
+        if m.get("projected"):
+            p = m["projected"]
+            projected_text = (
+                f"projected(accept {p['accepted_rate']:.1%}, "
+                f"cost {p['initial_cost']:.3e}->{p['final_cost']:.3e}, "
+                f"viol {p['monotonic_violations']}, "
+                f"max_inc {p['max_cost_increase']:.1e}) "
+            )
         return (
             f"{prefix} loss {m['loss']:.4e} mse {m['mse']:.4e} phys {m['phys']:.4e} "
             f"rmse {rmse:.4e} (mag {rmse_mag:.4e}, ang {rmse_ang_deg:.4e}deg) "
             f"(dPinf {m['max_dp_pu']:.3e} pu, dQinf {m['max_dq_pu']:.3e} pu; "
             f"{m['max_dp_mva']:.3e} MW, {m['max_dq_mva']:.3e} MVAr) "
             f"{format_residual_distribution_compact(m['dist'])} "
+            f"{projected_text}"
             f"{format_known_operator_diagnostics(m.get('kol'))}"
         )
 
