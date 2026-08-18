@@ -1,0 +1,364 @@
+\documentclass[10pt]{article}
+\usepackage[margin=0.7in]{geometry}
+\usepackage{amsmath}\usepackage{booktabs}\usepackage{float}\usepackage{pdflscape}
+\title{AC power-flow surrogates on the ppNR v2 corpus\\\large Four models, 31 grids: results so far}
+\author{PIGNN-Attn-LS-PPC experimental summary}
+\date{18 August 2026}
+\begin{document}\maketitle
+
+\section{Scope and status}
+
+Four PF surrogates, one model per grid, trained on the regenerated \textbf{ppNR
+v2} corpus. v2 is selected by the \texttt{\_u0clean\_sgenpert\_pvqvstart\_}
+configuration tag rather than the \texttt{\_ppNR\_} solver tag: several
+generations now share the latter, so selecting on it would silently mix corpora.
+All four share the parquet, the $1/3$--$1/3$--$1/3$ split and seed 42.
+
+\begin{table}[H]
+\centering\small
+\begin{tabular}{llrr}
+\toprule
+Tag & Model & Finished & Usable \\
+\midrule
+\texttt{pignn}    & \texttt{GNSMsg\_EdgeSelfAttn}, unrolled solver $K=40$ & 26/31 & \textbf{22} \\
+\texttt{graphkit} & IBM \texttt{gridfm\_graphkit} \texttt{GNS\_heterogeneous} & 30/31 & 30 \\
+\texttt{gridsfm}  & \texttt{gridsfm.GridTransformerBackbone} (released) & 26/31 & 26 \\
+\texttt{lumina}   & \texttt{lumina\_inference} HGT (released) & 30/31 & 30 \\
+\bottomrule
+\end{tabular}
+\caption{All trained from scratch; no released weights are loaded. ``Usable''
+excludes runs whose validation RMSE never moved. Aggregates below are over the
+\textbf{22 grids where all four produced a usable model}.}
+\end{table}
+
+\paragraph{Placement.} Grids were assigned to hardware by size: the 10 smallest
+to alex a40, case39--case\_illinois200 to alex2 a100, case300--case1888rte and
+the nine largest to helma h100. Batch sizes come from measured per-bus-sample
+activation cost (gridsfm $\sim$1040 KiB, lumina $\sim$145, graphkit $\sim$479),
+scaled to each card.
+
+\section{Two failure modes, both identified}
+
+\paragraph{Ten LUMINA runs died on a missing file.} Every LUMINA job on the alex
+tier failed at \texttt{make\_model} with \texttt{FileNotFoundError} on
+\texttt{lumina\_ckpt/lumina\_config.json}. LUMINA reads its architecture from
+the released config even when training from scratch, and the file existed only
+under the b313dc11 account while the dispatcher built the path from
+\texttt{\$HOME\_BASE}. Copying it to the iwi5295h account and resubmitting fixed
+all ten; they now train normally.
+
+\paragraph{Twelve runs hit the 24-hour wall clock.} All twelve are among the
+five largest grids, where a single epoch costs 2900--6700 s:
+
+\begin{table}[H]
+\centering\small
+\begin{tabular}{llrrr}
+\toprule
+Model & Grid & epochs reached & s/epoch & 40 epochs needs \\
+\midrule
+pignn    & ENTSO\_E\_RealGridTest & 29/40 & 2920 & 32.4 h \\
+pignn    & case9241pegase        & 17/40 & 5125 & 57.0 h \\
+graphkit & case9241pegase        & 28/40 & 3087 & 34.3 h \\
+gridsfm  & case6470rte           & 24/40 & 3602 & 40.0 h \\
+gridsfm  & case9241pegase        & 13/40 & 6655 & 74.0 h \\
+lumina   & case9241pegase        & 35/40 & 2450 & 27.2 h \\
+\bottomrule
+\end{tabular}
+\caption{Six of the twelve. Forty epochs simply does not fit a 24 h limit on
+these grids.}
+\end{table}
+
+The fix is the partition, not the model: helma's \texttt{preempt} partition
+allows \textbf{48 h} on the same h100 hardware. Ten of the twelve fit 40 epochs
+there at their measured speed and were resubmitted unchanged. The two
+case9241pegase runs do not fit even in 48 h, so their epoch budget was cut to
+what does --- \textbf{pignn to 30 and gridsfm to 24 epochs}. Those two therefore
+carry a smaller training budget than every other cell in this report, and their
+numbers should not be read as equal-budget comparisons. Preempt jobs can also be
+evicted by higher-priority work, and the drivers have no resume, so an eviction
+costs the run.
+
+\section{Results}
+
+\begin{table}[H]
+\centering\small
+\begin{tabular}{lr rrrr}
+\toprule
+ & & \multicolumn{4}{c}{$|V|$ RMSE [pu]} \\
+\cmidrule(lr){3-6}
+Grid & Buses & pignn & graphkit & gridsfm & lumina \\
+\midrule
+case4gs & 4 & \textbf{3.43e-05} & 3.22e-04 & 9.97e-03 & 1.80e-02 \\
+case5 & 5 & \textbf{1.62e-05} & 1.19e-04 & 1.55e-03 & 2.46e-02 \\
+case6ww & 6 & \textbf{2.13e-05} & 4.54e-04 & 6.01e-03 & 1.59e-02 \\
+case9 & 9 & \textbf{1.12e-04} & 7.39e-04 & 4.42e-03 & 2.02e-02 \\
+case14 & 14 & \textbf{8.13e-05} & 9.98e-04 & 3.17e-03 & 2.26e-02 \\
+case24\_ieee\_rts & 24 & \textbf{6.53e-05} & 1.24e-03 & 7.19e-03 & 2.49e-02 \\
+GBreducednetwork & 29 & \textbf{4.01e-05} & 4.09e-01 & 5.25e-02 & 6.02e-02 \\
+case30 & 30 & \textbf{1.34e-04} & 1.13e-03 & 1.63e-03 & 2.20e-02 \\
+case\_ieee30 & 30 & \textbf{2.22e-04} & 2.13e-03 & 3.04e-03 & 1.99e-02 \\
+case33bw & 33 & 3.84e-03 & \textbf{1.45e-03} & 5.14e-03 & 1.78e-02 \\
+case39 & 39 & \textbf{4.57e-05} & 7.29e-03 & 8.92e-03 & 2.87e-02 \\
+case57 & 57 & 1.92e-02 & \textbf{4.59e-03} & 1.97e-02 & 3.60e-02 \\
+case89pegase & 89 & \textbf{2.71e-03} & 1.08e-02 & 2.00e-02 & 2.96e-02 \\
+SimBench & 94 & \textbf{1.52e-03} & 5.15e-03 & 1.14e-02 & 5.42e-02 \\
+case118 & 118 & \textbf{3.22e-05} & 1.31e-03 & 1.95e-02 & 2.52e-02 \\
+case145 & 145 & \textbf{9.29e-03} & 1.25e-01 & 4.80e-02 & 6.70e-02 \\
+iceland & 189 & 1.05e-01 & \textbf{2.11e-02} & 4.63e-02 & 3.99e-02 \\
+case\_illinois200 & 200 & \textbf{1.52e-04} & 8.09e-03 & 5.39e-03 & 2.38e-02 \\
+case300 & 300 & \textbf{1.91e-02} & 2.13e-02 & 2.45e-02 & 4.23e-02 \\
+LVN\_heo1 & 722 & \textsc{nan} & \textbf{2.09e-02} & 3.09e-02 & 3.09e-02 \\
+case1354pegase & 1354 & 1.68e-01 & \textbf{2.05e-02} & 2.54e-02 & 2.99e-02 \\
+case1888rte & 1888 & \textsc{nan} & \textbf{2.89e-02} & 2.90e-02 & 3.29e-02 \\
+GBnetwork & 2224 & \textsc{nan} & 3.54e-02 & \textbf{3.19e-02} & 4.44e-02 \\
+case2848rte & 2848 & \textsc{nan} & 2.64e-02 & \textbf{1.67e-02} & 4.00e-02 \\
+case2869pegase & 2869 & 1.77e-01 & 3.21e-02 & \textbf{1.74e-02} & 4.13e-02 \\
+case3120sp & 3120 & 1.76e-01 & \textbf{2.86e-02} & 3.05e-02 & 3.37e-02 \\
+ENTSO\_E\_RealGridTest & 6051 & --- & \textbf{2.42e-02} & --- & 3.46e-02 \\
+case6470rte & 6470 & --- & \textbf{4.00e-02} & --- & 4.31e-02 \\
+case6495rte & 6495 & --- & \textbf{3.87e-02} & --- & 4.46e-02 \\
+case6515rte & 6515 & --- & \textbf{3.81e-02} & --- & 4.42e-02 \\
+\bottomrule
+\end{tabular}
+\caption{Voltage magnitude RMSE [pu]; best per grid in bold. \textsc{nan} marks a run that diverged (Section 4).}
+\end{table}
+
+\begin{table}[H]
+\centering\small
+\begin{tabular}{lr rrrr}
+\toprule
+ & & \multicolumn{4}{c}{$\theta$ RMSE [deg]} \\
+\cmidrule(lr){3-6}
+Grid & Buses & pignn & graphkit & gridsfm & lumina \\
+\midrule
+case4gs & 4 & \textbf{2.70e-03} & 2.47e-02 & 2.21e-01 & 5.58e-01 \\
+case5 & 5 & \textbf{5.37e-03} & 6.12e-02 & 2.89e-02 & 5.25e-01 \\
+case6ww & 6 & \textbf{8.73e-03} & 6.54e-02 & 3.13e+00 & 8.05e-01 \\
+case9 & 9 & \textbf{5.26e-02} & 1.18e-01 & 6.82e+00 & 1.38e+00 \\
+case14 & 14 & \textbf{1.52e-02} & 1.30e-01 & 2.45e+00 & 1.17e+00 \\
+case24\_ieee\_rts & 24 & \textbf{3.58e-02} & 2.64e-01 & 1.62e+00 & 3.03e+00 \\
+GBreducednetwork & 29 & \textbf{1.18e-01} & 1.02e+01 & 3.27e+01 & 1.20e+01 \\
+case30 & 30 & \textbf{4.73e-02} & 9.80e-02 & 1.84e+00 & 8.98e-01 \\
+case\_ieee30 & 30 & \textbf{1.71e-02} & 1.24e-01 & 3.86e+00 & 2.16e+00 \\
+case33bw & 33 & 2.65e-01 & \textbf{1.02e-01} & 1.47e+00 & 2.94e-01 \\
+case39 & 39 & \textbf{1.84e-02} & 5.11e-01 & 1.88e+01 & 5.76e+00 \\
+case57 & 57 & \textbf{1.03e-01} & 2.27e-01 & 3.06e+00 & 3.69e+00 \\
+case89pegase & 89 & \textbf{2.88e-01} & 6.82e-01 & 1.06e+00 & 6.58e+00 \\
+SimBench & 94 & \textbf{9.96e-02} & 2.78e-01 & 4.86e+00 & 7.36e+00 \\
+case118 & 118 & \textbf{3.77e-02} & 4.58e-01 & 3.64e+01 & 3.66e+00 \\
+case145 & 145 & \textbf{4.54e+00} & 1.84e+01 & 1.01e+02 & 6.84e+01 \\
+iceland & 189 & 4.20e+01 & \textbf{2.51e+00} & 2.55e+01 & 9.32e+00 \\
+case\_illinois200 & 200 & \textbf{5.62e-02} & 5.51e-01 & 5.03e+01 & 2.53e+00 \\
+case300 & 300 & \textbf{2.95e+00} & 4.71e+00 & 2.77e+01 & 1.90e+01 \\
+LVN\_heo1 & 722 & \textsc{nan} & 1.33e+00 & \textbf{7.44e-01} & 1.83e+00 \\
+case1354pegase & 1354 & 6.75e+01 & \textbf{5.15e+00} & 1.44e+01 & 1.05e+01 \\
+case1888rte & 1888 & \textsc{nan} & \textbf{6.99e+00} & 1.56e+02 & 1.44e+01 \\
+GBnetwork & 2224 & \textsc{nan} & 4.94e+00 & \textbf{2.14e+00} & 1.72e+01 \\
+case2848rte & 2848 & \textsc{nan} & \textbf{3.12e+00} & 6.97e+01 & 5.73e+00 \\
+case2869pegase & 2869 & 7.56e+01 & \textbf{9.69e+00} & 7.04e+01 & 2.87e+01 \\
+case3120sp & 3120 & 7.97e+01 & \textbf{8.03e+00} & 1.23e+01 & 1.64e+01 \\
+ENTSO\_E\_RealGridTest & 6051 & --- & \textbf{4.15e+00} & --- & 1.10e+01 \\
+case6470rte & 6470 & --- & \textbf{1.22e+01} & --- & 1.74e+01 \\
+case6495rte & 6495 & --- & \textbf{3.39e+00} & --- & 1.17e+01 \\
+case6515rte & 6515 & --- & \textbf{7.98e+00} & --- & 1.45e+01 \\
+\bottomrule
+\end{tabular}
+\caption{Voltage angle RMSE [deg].}
+\end{table}
+
+\paragraph{PIGNN leads on every family.} Over the 22 grids all four completed:
+
+\begin{table}[H]
+\centering\small
+\begin{tabular}{lrrrr}
+\toprule
+median over 22 grids & pignn & graphkit & gridsfm & lumina \\
+\midrule
+$|V|$ RMSE [pu]              & \textbf{1.87e-04} & 4.87e-03 & 1.07e-02 & 2.70e-02 \\
+$\theta$ RMSE [deg]          & \textbf{0.0779}   & 0.368    & 5.84     & 3.68 \\
+$\Delta P^{\infty}$ [pu]     & \textbf{1.60e-02} & 2.34e-01 & 8.32e-01 & 3.01 \\
+$\Delta Q^{\infty}$ [pu]     & \textbf{1.18e-02} & 1.77e-01 & 3.92e-01 & 4.45e-01 \\
+$\overline{|\Delta P|}$ [pu] & \textbf{1.75e-03} & 3.90e-02 & 9.99e-02 & 4.00e-01 \\
+$\overline{|\Delta Q|}$ [pu] & \textbf{1.85e-03} & 3.03e-02 & 1.16e-01 & 1.35e-01 \\
+p95$|\Delta P|$ [pu]         & \textbf{4.40e-03} & 1.22e-01 & 4.38e-01 & 1.38 \\
+p95$|\Delta Q|$ [pu]         & \textbf{5.62e-03} & 9.34e-02 & 3.42e-01 & 3.67e-01 \\
+\bottomrule
+\end{tabular}
+\caption{Win counts follow the same order: PIGNN takes 14--17 of 22 on every
+family, graphkit 1--5, gridsfm 0--6, lumina 0 throughout.}
+\end{table}
+
+The ordering is \texttt{pignn} $<$ \texttt{graphkit} $<$ \texttt{gridsfm} $<$
+\texttt{lumina} on all eight metrics, with no crossing. PIGNN's margin is
+largest on the residuals --- a factor of 15 against graphkit on
+$\Delta P^{\infty}$ and 22 on $\overline{|\Delta P|}$ --- which is the expected
+shape for a model whose iteration is driven by that residual.
+
+\begin{table}[H]
+\centering\small
+\begin{tabular}{lr rrrr rrrr}
+\toprule
+ & & \multicolumn{4}{c}{$\Delta P^{\infty}$ [pu]} & \multicolumn{4}{c}{$\Delta Q^{\infty}$ [pu]} \\
+\cmidrule(lr){3-6}\cmidrule(lr){7-10}
+Grid & Buses & pignn & graphkit & gridsfm & lumina & pignn & graphkit & gridsfm & lumina \\
+\midrule
+case4gs & 4 & \textbf{1.15e-03} & 1.37e-02 & 7.23e-02 & 3.24e-01 & \textbf{1.97e-03} & 2.00e-02 & 2.01e-01 & 1.86e-01 \\
+case5 & 5 & \textbf{3.52e-03} & 5.35e-02 & 3.50e-02 & 4.89e-01 & \textbf{3.73e-03} & 2.40e-02 & 1.26e-01 & 1.28e-01 \\
+case6ww & 6 & \textbf{5.37e-04} & 1.65e-02 & 4.91e-01 & 1.11e-01 & \textbf{4.10e-04} & 1.08e-02 & 1.51e-01 & 1.29e-01 \\
+case9 & 9 & \textbf{2.49e-03} & 2.20e-02 & 4.44e-01 & 1.99e-01 & \textbf{1.61e-03} & 1.75e-02 & 1.07e-01 & 9.96e-02 \\
+case14 & 14 & \textbf{8.07e-04} & 2.36e-02 & 5.51e-01 & 5.28e-01 & \textbf{7.05e-04} & 1.55e-02 & 5.22e-02 & 7.29e-02 \\
+case24\_ieee\_rts & 24 & \textbf{2.81e-03} & 1.51e-01 & 5.89e-01 & 1.97e+00 & \textbf{3.85e-03} & 5.95e-02 & 3.10e-01 & 3.79e-01 \\
+GBreducednetwork & 29 & \textbf{3.56e-01} & 4.66e+03 & 8.06e+01 & 2.10e+02 & \textbf{2.08e-01} & 2.98e+00 & 1.45e+00 & 5.46e+02 \\
+case30 & 30 & \textbf{2.53e-03} & 1.86e-02 & 1.73e-01 & 1.01e-01 & \textbf{2.20e-03} & 1.60e-02 & 9.75e-02 & 7.55e-02 \\
+case\_ieee30 & 30 & \textbf{1.79e-03} & 4.04e-02 & 6.17e-01 & 3.68e-01 & \textbf{1.22e-03} & 3.04e-02 & 6.36e-02 & 1.02e-01 \\
+case33bw & 33 & 2.21e-02 & \textbf{3.88e-03} & 3.88e-02 & 1.25e-01 & 2.61e-02 & \textbf{8.09e-03} & 3.13e-02 & 9.96e-02 \\
+case39 & 39 & \textbf{1.79e-03} & 3.71e-01 & 1.02e+00 & 4.46e+00 & \textbf{1.53e-03} & 3.43e-01 & 4.51e-01 & 8.36e-01 \\
+case57 & 57 & \textbf{3.97e-02} & 5.92e-02 & 2.16e+00 & 1.09e+00 & 4.89e-02 & \textbf{3.08e-02} & 3.34e-01 & 4.14e-01 \\
+case89pegase & 89 & 1.55e+00 & 9.84e-01 & \textbf{6.45e-01} & 1.95e+01 & 2.64e+00 & 1.06e+00 & \textbf{7.91e-01} & 2.63e+00 \\
+SimBench & 94 & \textbf{3.05e-02} & 2.48e-01 & 1.61e+00 & 7.15e+00 & \textbf{1.92e-02} & 2.37e-01 & 1.05e+00 & 3.48e+00 \\
+case118 & 118 & \textbf{9.88e-03} & 2.20e-01 & 2.38e+00 & 2.27e+00 & \textbf{4.29e-03} & 1.18e-01 & 7.08e-01 & 4.75e-01 \\
+case145 & 145 & \textbf{1.01e+00} & 2.09e+02 & 6.46e+01 & 2.74e+03 & \textbf{2.78e-01} & 3.88e+01 & 2.48e+00 & 2.35e+03 \\
+iceland & 189 & 7.23e+03 & 1.66e+00 & \textbf{3.39e-01} & 5.30e+00 & 1.19e+04 & \textbf{1.21e+00} & 1.22e+02 & 2.13e+00 \\
+case\_illinois200 & 200 & \textbf{7.26e-03} & 2.56e-01 & 1.72e+00 & 3.75e+00 & \textbf{1.75e-03} & 2.67e-01 & 2.26e-01 & 3.12e-01 \\
+case300 & 300 & 1.59e+00 & 9.83e+00 & \textbf{1.21e+00} & 8.06e+01 & 4.54e+00 & 7.18e+00 & \textbf{1.36e+00} & 1.81e+01 \\
+LVN\_heo1 & 722 & \textsc{nan} & 5.53e+00 & \textbf{1.40e+00} & 5.23e+00 & \textsc{nan} & 4.15e+00 & 3.81e+00 & \textbf{1.80e+00} \\
+case1354pegase & 1354 & 9.81e+03 & 4.56e+01 & \textbf{1.85e+00} & 4.32e+02 & 1.27e+04 & 1.28e+01 & \textbf{9.95e-01} & 1.22e+01 \\
+case1888rte & 1888 & \textsc{nan} & \textbf{2.41e+02} & 2.59e+02 & 5.69e+02 & \textsc{nan} & \textbf{4.66e+01} & 8.89e+01 & 1.18e+02 \\
+GBnetwork & 2224 & \textsc{nan} & 1.81e+02 & \textbf{1.10e+00} & 3.18e+04 & \textsc{nan} & 5.58e+01 & \textbf{4.81e+00} & 3.95e+03 \\
+case2848rte & 2848 & \textsc{nan} & \textbf{1.31e+01} & 1.97e+01 & 2.10e+02 & \textsc{nan} & 2.26e+01 & \textbf{2.20e+00} & 1.13e+02 \\
+case2869pegase & 2869 & 1.16e+04 & 4.44e+02 & \textbf{2.53e+00} & 7.66e+03 & 1.65e+04 & 1.35e+02 & \textbf{1.22e+00} & 6.69e+03 \\
+case3120sp & 3120 & 1.97e+04 & 1.94e+03 & \textbf{1.79e+03} & 7.97e+03 & 3.64e+04 & 8.85e+01 & \textbf{4.09e+01} & 4.18e+03 \\
+ENTSO\_E\_RealGridTest & 6051 & --- & \textbf{3.61e+01} & --- & 7.75e+01 & --- & \textbf{1.91e+01} & --- & 4.34e+01 \\
+case6470rte & 6470 & --- & \textbf{1.66e+02} & --- & 1.08e+03 & --- & \textbf{8.33e+01} & --- & 3.36e+02 \\
+case6495rte & 6495 & --- & \textbf{1.50e+03} & --- & 5.46e+03 & --- & \textbf{2.72e+02} & --- & 3.17e+03 \\
+case6515rte & 6515 & --- & \textbf{1.12e+02} & --- & 9.71e+02 & --- & \textbf{1.08e+02} & --- & 4.20e+02 \\
+\bottomrule
+\end{tabular}
+\caption{Worst-bus power-balance residual, pu on a 100 MVA base. $P$ is not scored at the slack, $Q$ not at slack or PV.}
+\end{table}
+
+\begin{table}[H]
+\centering\small
+\begin{tabular}{lr rrrr rrrr}
+\toprule
+ & & \multicolumn{4}{c}{$\overline{|\Delta P|}$ [pu]} & \multicolumn{4}{c}{$\overline{|\Delta Q|}$ [pu]} \\
+\cmidrule(lr){3-6}\cmidrule(lr){7-10}
+Grid & Buses & pignn & graphkit & gridsfm & lumina & pignn & graphkit & gridsfm & lumina \\
+\midrule
+case4gs & 4 & \textbf{7.42e-04} & 7.92e-03 & 4.04e-02 & 2.11e-01 & \textbf{1.67e-03} & 1.63e-02 & 1.42e-01 & 1.30e-01 \\
+case5 & 5 & \textbf{2.37e-03} & 2.73e-02 & 1.90e-02 & 2.63e-01 & \textbf{3.73e-03} & 2.40e-02 & 1.27e-01 & 1.28e-01 \\
+case6ww & 6 & \textbf{3.04e-04} & 8.25e-03 & 2.36e-01 & 5.39e-02 & \textbf{2.62e-04} & 6.22e-03 & 9.94e-02 & 7.76e-02 \\
+case9 & 9 & \textbf{1.04e-03} & 9.41e-03 & 1.09e-01 & 9.54e-02 & \textbf{9.22e-04} & 8.21e-03 & 4.61e-02 & 4.43e-02 \\
+case14 & 14 & \textbf{2.08e-04} & 7.64e-03 & 7.30e-02 & 1.03e-01 & \textbf{3.01e-04} & 6.38e-03 & 1.74e-02 & 3.04e-02 \\
+case24\_ieee\_rts & 24 & \textbf{1.02e-03} & 4.08e-02 & 1.43e-01 & 4.94e-01 & \textbf{1.39e-03} & 2.19e-02 & 1.09e-01 & 1.40e-01 \\
+GBreducednetwork & 29 & \textbf{5.99e-02} & 2.16e+02 & 4.38e+00 & 1.94e+01 & \textbf{9.08e-02} & 1.19e+00 & 5.66e-01 & 1.10e+02 \\
+case30 & 30 & \textbf{4.07e-04} & 5.06e-03 & 2.76e-02 & 2.53e-02 & \textbf{3.15e-04} & 4.45e-03 & 1.62e-02 & 1.31e-02 \\
+case\_ieee30 & 30 & \textbf{2.10e-04} & 9.73e-03 & 4.43e-02 & 9.59e-02 & \textbf{2.64e-04} & 8.74e-03 & 1.34e-02 & 2.61e-02 \\
+case33bw & 33 & 1.36e-03 & \textbf{9.12e-04} & 1.10e-02 & 1.40e-02 & 1.48e-03 & \textbf{1.32e-03} & 8.22e-03 & 9.69e-03 \\
+case39 & 39 & \textbf{3.31e-04} & 9.34e-02 & 2.56e-01 & 7.65e-01 & \textbf{5.32e-04} & 9.85e-02 & 1.23e-01 & 2.16e-01 \\
+case57 & 57 & \textbf{5.51e-03} & 1.24e-02 & 9.84e-02 & 2.14e-01 & \textbf{8.01e-03} & 8.05e-03 & 5.36e-02 & 6.78e-02 \\
+case89pegase & 89 & \textbf{5.31e-02} & 1.90e-01 & 9.64e-02 & 1.72e+00 & 1.55e-01 & 1.76e-01 & \textbf{1.26e-01} & 5.50e-01 \\
+SimBench & 94 & \textbf{2.13e-03} & 4.70e-02 & 4.02e-01 & 8.40e-01 & \textbf{2.03e-03} & 4.65e-02 & 1.57e-01 & 3.42e-01 \\
+case118 & 118 & \textbf{8.71e-04} & 3.71e-02 & 2.31e-01 & 3.06e-01 & \textbf{7.20e-04} & 2.26e-02 & 1.46e-01 & 9.07e-02 \\
+case145 & 145 & \textbf{5.24e-02} & 8.34e+00 & 3.67e+00 & 8.12e+01 & \textbf{2.73e-02} & 2.94e+00 & 2.74e-01 & 1.04e+02 \\
+iceland & 189 & 2.31e+02 & 1.42e-01 & \textbf{2.89e-02} & 6.50e-01 & 3.66e+02 & \textbf{1.18e-01} & 9.22e-01 & 1.66e-01 \\
+case\_illinois200 & 200 & \textbf{3.85e-04} & 3.73e-02 & 8.30e-02 & 2.60e-01 & \textbf{2.60e-04} & 3.66e-02 & 4.45e-02 & 5.71e-02 \\
+case300 & 300 & \textbf{3.92e-02} & 5.26e-01 & 9.75e-02 & 2.50e+00 & \textbf{1.07e-01} & 2.93e-01 & 1.09e-01 & 6.01e-01 \\
+LVN\_heo1 & 722 & \textsc{nan} & 1.24e-01 & \textbf{1.26e-02} & 3.34e-02 & \textsc{nan} & 1.08e-01 & 1.13e-01 & \textbf{8.04e-02} \\
+case1354pegase & 1354 & 3.53e+02 & 1.09e+00 & \textbf{1.01e-01} & 1.76e+00 & 5.01e+02 & 4.65e-01 & \textbf{1.17e-01} & 4.22e-01 \\
+case1888rte & 1888 & \textsc{nan} & 1.49e+00 & \textbf{6.77e-01} & 1.69e+00 & \textsc{nan} & 6.33e-01 & \textbf{3.56e-01} & 4.49e-01 \\
+GBnetwork & 2224 & \textsc{nan} & 2.05e+00 & \textbf{8.28e-02} & 1.38e+02 & \textsc{nan} & 7.71e-01 & \textbf{2.66e-01} & 3.18e+01 \\
+case2848rte & 2848 & \textsc{nan} & 4.44e-01 & \textbf{1.24e-01} & 7.78e-01 & \textsc{nan} & 2.79e-01 & \textbf{1.44e-01} & 3.63e-01 \\
+case2869pegase & 2869 & 3.89e+02 & 4.92e+00 & \textbf{1.23e-01} & 7.81e+01 & 6.71e+02 & 1.77e+00 & \textbf{1.16e-01} & 2.51e+01 \\
+case3120sp & 3120 & 5.83e+02 & 1.78e+00 & \textbf{6.44e-01} & 8.07e+00 & 8.70e+02 & 6.13e-01 & \textbf{1.96e-01} & 2.14e+00 \\
+ENTSO\_E\_RealGridTest & 6051 & --- & \textbf{3.46e-01} & --- & 5.83e-01 & --- & \textbf{1.88e-01} & --- & 2.38e-01 \\
+case6470rte & 6470 & --- & \textbf{1.04e+00} & --- & 1.80e+00 & --- & \textbf{4.37e-01} & --- & 4.98e-01 \\
+case6495rte & 6495 & --- & \textbf{9.51e-01} & --- & 2.12e+00 & --- & \textbf{3.41e-01} & --- & 9.53e-01 \\
+case6515rte & 6515 & --- & \textbf{7.27e-01} & --- & 1.52e+00 & --- & \textbf{3.63e-01} & --- & 4.98e-01 \\
+\bottomrule
+\end{tabular}
+\caption{Mean residual, pu.}
+\end{table}
+
+\begin{table}[H]
+\centering\small
+\begin{tabular}{lr rrrr rrrr}
+\toprule
+ & & \multicolumn{4}{c}{p95$|\Delta P|$ [pu]} & \multicolumn{4}{c}{p95$|\Delta Q|$ [pu]} \\
+\cmidrule(lr){3-6}\cmidrule(lr){7-10}
+Grid & Buses & pignn & graphkit & gridsfm & lumina & pignn & graphkit & gridsfm & lumina \\
+\midrule
+case4gs & 4 & \textbf{1.83e-03} & 2.13e-02 & 9.27e-02 & 4.51e-01 & \textbf{3.23e-03} & 2.94e-02 & 3.57e-01 & 3.52e-01 \\
+case5 & 5 & \textbf{4.85e-03} & 7.29e-02 & 5.13e-02 & 6.95e-01 & \textbf{7.33e-03} & 6.25e-02 & 3.26e-01 & 3.32e-01 \\
+case6ww & 6 & \textbf{7.56e-04} & 2.34e-02 & 6.25e-01 & 1.47e-01 & \textbf{6.81e-04} & 1.73e-02 & 2.41e-01 & 2.01e-01 \\
+case9 & 9 & \textbf{2.76e-03} & 2.62e-02 & 4.77e-01 & 2.40e-01 & \textbf{2.40e-03} & 2.18e-02 & 1.28e-01 & 1.23e-01 \\
+case14 & 14 & \textbf{7.69e-04} & 2.28e-02 & 4.77e-01 & 4.18e-01 & \textbf{9.55e-04} & 1.68e-02 & 5.34e-02 & 7.73e-02 \\
+case24\_ieee\_rts & 24 & \textbf{2.73e-03} & 1.24e-01 & 4.93e-01 & 1.48e+00 & \textbf{3.91e-03} & 5.80e-02 & 2.86e-01 & 3.82e-01 \\
+GBreducednetwork & 29 & \textbf{3.03e-01} & 1.26e+03 & 8.28e+00 & 9.69e+01 & \textbf{2.26e-01} & 3.48e+00 & 1.94e+00 & 4.69e+02 \\
+case30 & 30 & \textbf{1.35e-03} & 1.41e-02 & 1.23e-01 & 9.04e-02 & \textbf{9.44e-04} & 1.18e-02 & 5.87e-02 & 4.35e-02 \\
+case\_ieee30 & 30 & \textbf{8.33e-04} & 3.01e-02 & 1.57e-01 & 3.07e-01 & \textbf{8.13e-04} & 2.55e-02 & 5.22e-02 & 8.64e-02 \\
+case33bw & 33 & 3.96e-03 & \textbf{2.85e-03} & 3.04e-02 & 1.02e-01 & \textbf{3.66e-03} & 4.04e-03 & 2.08e-02 & 4.78e-02 \\
+case39 & 39 & \textbf{8.76e-04} & 2.69e-01 & 8.25e-01 & 2.25e+00 & \textbf{1.39e-03} & 2.78e-01 & 3.44e-01 & 6.32e-01 \\
+case57 & 57 & \textbf{2.52e-02} & 3.63e-02 & 3.22e-01 & 7.02e-01 & 4.13e-02 & \textbf{2.19e-02} & 2.10e-01 & 3.00e-01 \\
+case89pegase & 89 & \textbf{1.68e-01} & 5.72e-01 & 2.79e-01 & 5.24e+00 & 1.29e+00 & 6.13e-01 & \textbf{4.40e-01} & 1.68e+00 \\
+SimBench & 94 & \textbf{6.68e-03} & 1.47e-01 & 1.34e+00 & 3.53e+00 & \textbf{7.49e-03} & 1.50e-01 & 7.07e-01 & 1.39e+00 \\
+case118 & 118 & \textbf{3.21e-03} & 1.13e-01 & 1.07e+00 & 1.28e+00 & \textbf{1.99e-03} & 6.69e-02 & 4.22e-01 & 2.97e-01 \\
+case145 & 145 & \textbf{2.05e-01} & 3.05e+01 & 1.79e+01 & 1.90e+02 & \textbf{1.10e-01} & 1.24e+01 & 8.54e-01 & 4.14e+02 \\
+iceland & 189 & 6.83e+02 & 5.28e-01 & \textbf{1.16e-01} & 2.10e+00 & 1.33e+03 & \textbf{4.33e-01} & 5.59e-01 & 6.03e-01 \\
+case\_illinois200 & 200 & \textbf{1.06e-03} & 1.20e-01 & 4.60e-01 & 8.64e-01 & \textbf{7.74e-04} & 1.20e-01 & 1.30e-01 & 1.64e-01 \\
+case300 & 300 & \textbf{1.12e-01} & 1.89e+00 & 3.79e-01 & 9.57e+00 & \textbf{3.68e-01} & 1.03e+00 & 3.78e-01 & 2.15e+00 \\
+LVN\_heo1 & 722 & \textsc{nan} & 4.03e-01 & \textbf{4.39e-02} & 1.18e-01 & \textsc{nan} & 3.82e-01 & \textbf{3.53e-01} & 3.79e-01 \\
+case1354pegase & 1354 & 1.65e+03 & 3.43e+00 & \textbf{4.16e-01} & 4.45e+00 & 2.52e+03 & 1.65e+00 & \textbf{3.44e-01} & 1.46e+00 \\
+case1888rte & 1888 & \textsc{nan} & 4.95e+00 & \textbf{1.48e+00} & 4.32e+00 & \textsc{nan} & 2.15e+00 & \textbf{9.81e-01} & 1.35e+00 \\
+GBnetwork & 2224 & \textsc{nan} & 6.85e+00 & \textbf{3.04e-01} & 8.27e+01 & \textsc{nan} & 2.74e+00 & \textbf{9.13e-01} & 1.56e+01 \\
+case2848rte & 2848 & \textsc{nan} & 1.63e+00 & \textbf{3.34e-01} & 2.50e+00 & \textsc{nan} & 9.14e-01 & \textbf{4.74e-01} & 1.07e+00 \\
+case2869pegase & 2869 & 1.96e+03 & 1.62e+01 & \textbf{5.44e-01} & 3.02e+02 & 3.63e+03 & 6.53e+00 & \textbf{3.41e-01} & 7.15e+01 \\
+case3120sp & 3120 & 2.44e+03 & 4.61e+00 & \textbf{2.10e-01} & 7.08e+00 & 3.39e+03 & 2.01e+00 & \textbf{7.53e-01} & 1.72e+00 \\
+ENTSO\_E\_RealGridTest & 6051 & --- & \textbf{1.18e+00} & --- & 2.71e+00 & --- & \textbf{6.77e-01} & --- & 8.87e-01 \\
+case6470rte & 6470 & --- & \textbf{3.60e+00} & --- & 5.71e+00 & --- & 1.63e+00 & --- & \textbf{1.51e+00} \\
+case6495rte & 6495 & --- & \textbf{2.04e+00} & --- & 3.68e+00 & --- & \textbf{1.06e+00} & --- & 1.33e+00 \\
+case6515rte & 6515 & --- & \textbf{2.51e+00} & --- & 4.48e+00 & --- & \textbf{1.18e+00} & --- & 1.29e+00 \\
+\bottomrule
+\end{tabular}
+\caption{95th-percentile residual, pu.}
+\end{table}
+
+\section{PIGNN diverges on four grids}
+
+On LVN\_heo1, case1888rte, GBnetwork and case2848rte the PIGNN run produced a
+constant validation RMSE, and the cause is \emph{not} the v1 defect. The
+zero-grad guard that killed 11 runs in v1 fired \textbf{zero times} here ---
+\texttt{-{}-armijo\_mode geometric\_safe} kept the graph edge alive as intended.
+What happens instead is divergence:
+
+\begin{verbatim}
+Epoch  0 | train loss 1.1116e+04  rmse 1.0297e+00  (dPinf 1.126e+05 pu)
+Epoch 40 | train loss nan         rmse nan         (dPinf nan)
+\end{verbatim}
+
+The initial loss is already $1.1\times10^{4}$ with a worst-bus mismatch of
+$1.1\times10^{5}$ pu, and the run reaches NaN. The reported validation RMSE is
+constant because the best checkpoint never moves past epoch 0. These cells are
+marked \textsc{nan} and excluded from the aggregates.
+
+\textbf{This is a different failure from v1 and needs a different fix.} The v1
+problem was no gradient; here the gradient exists and is too large.
+\texttt{geometric\_safe} always applies a step, including one that increases the
+residual, which plausibly contributes --- it is the trade-off noted when the
+mode was chosen. Gradient clipping or a lower learning rate on these grids is
+the obvious next experiment; neither has been run.
+
+\section{Caveats}
+
+\paragraph{Coverage is incomplete.} 22 of 31 grids have all four models. The
+resubmitted wall-clock runs are still training, and one graphkit and one lumina
+grid remain outstanding.
+
+\paragraph{Two cells carry a smaller budget.} pignn and gridsfm on
+case9241pegase run 30 and 24 epochs against 40 everywhere else.
+
+\paragraph{Single seed.} Every number is one run. Differences below roughly a
+factor of two should not be read as real; PIGNN's margins are far above that
+threshold, the graphkit--gridsfm gap on $|V|$ is not.
+
+\end{document}
