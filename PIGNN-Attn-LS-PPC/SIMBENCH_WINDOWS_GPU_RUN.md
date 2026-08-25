@@ -1,396 +1,326 @@
-# Running the SimBench PIGNN-Attn-LS Model on a Windows GPU Machine
+# SimBench Power Flow — Run the Model Yourself
 
-This guide explains how to train and evaluate the SimBench snapshot-envelope
-manual-flat model locally on a single Windows machine with an NVIDIA GPU.
+This walks you through running a trained AC power-flow model on the SimBench
+grid (94 buses), checking how accurate it is, and drawing comparison plots.
 
-The recommended configuration is the best SimBench run from the June 2026
-experiment:
+**You do not need a GPU.** Everything here runs on a normal laptop CPU in about
+15 minutes. It works on Windows (PowerShell), on WSL Ubuntu, and on Linux/macOS.
 
-- model: `GNSMsg_EdgeSelfAttn`
-- dataset: `SimBench_snapshot_envelope_manual_flat_100MVA_coupled_ppcY_manual_flat_siNR_36000_NR_branchrows_directSI.parquet`
-- buses / branches: 94 buses, 131 branches
-- loss: PINN physics loss only
-- Armijo mode: restored fixed mode
-- best attention depth: `num_attn_layers=10`
-- voltage-level feature: disabled, i.e. no `--vn_feat`
+**You do not need coding experience.** Every step is one command to copy and
+paste. After each step there is a line telling you what you should see.
 
-## 1. Repository Layout
+At the end you will have plots like this — one per scenario, comparing the
+model against the reference solver bus by bus:
 
-Run commands from the PPC directory:
+```
+            |V|            theta            P              Q
+PIGNN     [ graph ]      [ graph ]      [ graph ]      [ graph ]
+DC init   [ graph ]      [ graph ]      [ graph ]      [ graph ]
+Newton    [ graph ]      [ graph ]      [ graph ]      [ graph ]
+```
+
+---
+
+## Before you start
+
+1. **Turn on the FAU VPN.** Nothing below works without it.
+2. Make sure you have about **1.5 GB of free disk space**.
+3. Open a terminal:
+   - Windows: press Start, type `PowerShell`, open it
+   - WSL / Linux / macOS: open your normal terminal
+
+You will need the password for `chkim@131.188.35.62`. Ask the project owner.
+
+---
+
+## Step 1 — Download everything (one command)
+
+Everything you need — data, model, scripts — comes down in a single command.
+
+**WSL / Linux / macOS:**
+
+```bash
+scp -r chkim@131.188.35.62:PIGNN-Attn-LS/simbench_v2_release ~/simbench
+```
+
+**Windows PowerShell:**
 
 ```powershell
-cd C:\path\to\PIGNN-Attn-LS\PIGNN-Attn-LS-PPC
+scp -r chkim@131.188.35.62:PIGNN-Attn-LS/simbench_v2_release $HOME\simbench
 ```
 
-Expected important files:
+Type the password when asked. This downloads about 450 MB, usually 2–10 minutes.
 
-```text
-train_valid_test.py
-GNSMsg_SelfAttention_armijo.py
-Dataset_optimized_complex_columns.py
-collate_blockdiag_optimized_complex_columns.py
-read_npy_columns_optimized.py
-helper.py
+Now go into the folder:
+
+```bash
+cd ~/simbench
 ```
 
-Put the SimBench parquet somewhere local, for example:
+(Windows PowerShell: `cd $HOME\simbench`)
 
-```text
-C:\data\SimBench_snapshot_envelope_manual_flat_100MVA_coupled_ppcY_manual_flat_siNR_36000_NR_branchrows_directSI.parquet
+**What you should see** — run `ls` (PowerShell: `dir`):
+
+```
+CONFIG.txt   README.md   ckpt   data   environment.yml   requirements.txt   scripts
 ```
 
-## 2. Download Data and Stored Checkpoints
+### Check the data file arrived complete
 
-The SimBench parquet, trained checkpoints, and training logs are also stored on:
+A half-finished download does not report an error, so check the size:
 
-```text
-chkim@131.188.35.62
+```bash
+ls -l data/
 ```
 
-You must be connected to the FAU university VPN before using `scp`.
+The number must be exactly **448628631**. If it is anything else, delete the
+folder and run the `scp` command again.
 
-On the server, the parquets are available under:
+---
 
-```text
-~/PIGNN-Attn-LS/ScenarioSynthesis_PPC/out/
+## Step 2 — Set up Python
+
+Pick **one** of the two options.
+
+### Option A — conda (recommended if you have Anaconda or Miniconda)
+
+```bash
+conda env create -f environment.yml
+conda activate simbench-pf
 ```
 
-Verified parquet filenames:
+Then install PyTorch:
 
-```text
-SimBench_snapshot_envelope_manual_flat_coupled_ppcY_manual_flat_siNR_36000_NR_branchrows_directSI.parquet
-SimBench_snapshot_envelope_manual_flat_100MVA_coupled_ppcY_manual_flat_siNR_36000_NR_branchrows_directSI.parquet
+```bash
+pip install torch==2.4.0 --index-url https://download.pytorch.org/whl/cpu
+pip install torch-scatter -f https://data.pyg.org/whl/torch-2.4.0+cpu.html
 ```
 
-For this guide, use the `100MVA` parquet:
+### Option B — plain Python (no conda)
 
-```powershell
-New-Item -ItemType Directory -Force C:\data | Out-Null
-
-scp chkim@131.188.35.62:~/PIGNN-Attn-LS/ScenarioSynthesis_PPC/out/SimBench_snapshot_envelope_manual_flat_100MVA_coupled_ppcY_manual_flat_siNR_36000_NR_branchrows_directSI.parquet C:\data\
+```bash
+python -m venv simbench-env
 ```
 
-The trained SimBench checkpoints and logs have been uploaded to:
+Activate it:
 
-```text
-~/PIGNN-Attn-LS/ScenarioSynthesis_PPC/results/ckpt/simbench_manual_flat_fixed_armijo_20260615_190832/
-~/PIGNN-Attn-LS/ScenarioSynthesis_PPC/results/logs/simbench_manual_flat_fixed_armijo_20260615_190832/
+```bash
+source simbench-env/bin/activate        # WSL / Linux / macOS
+.\simbench-env\Scripts\Activate.ps1     # Windows PowerShell
 ```
 
-Download them locally:
+Then:
 
-```powershell
-New-Item -ItemType Directory -Force .\results\ckpt | Out-Null
-New-Item -ItemType Directory -Force .\results\logs | Out-Null
-
-scp -r chkim@131.188.35.62:~/PIGNN-Attn-LS/ScenarioSynthesis_PPC/results/ckpt/simbench_manual_flat_fixed_armijo_20260615_190832 .\results\ckpt\
-
-scp -r chkim@131.188.35.62:~/PIGNN-Attn-LS/ScenarioSynthesis_PPC/results/logs/simbench_manual_flat_fixed_armijo_20260615_190832 .\results\logs\
+```bash
+pip install -r requirements.txt
+pip install torch==2.4.0 --index-url https://download.pytorch.org/whl/cpu
+pip install torch-scatter -f https://data.pyg.org/whl/torch-2.4.0+cpu.html
 ```
 
-The best checkpoint is:
+### Check it worked
 
-```text
-.\results\ckpt\simbench_manual_flat_fixed_armijo_20260615_190832\simbench_flat_fix_pinn_b16_lr3e-6_K40_dhi16_h8_attn10_novn_40_best_model.ckpt
+```bash
+python -c "import torch, torch_scatter, pyarrow, matplotlib; print('all good, torch', torch.__version__)"
 ```
 
-The matching training log is:
+**What you should see:** `all good, torch 2.4.0+cpu`
 
-```text
-.\results\logs\simbench_manual_flat_fixed_armijo_20260615_190832\simbench_flat_fix_pinn_b16_lr3e-6_K40_dhi16_h8_attn10_novn_training_log.txt
+> **Have an NVIDIA GPU and want to use it?** Replace `cpu` with `cu121` in both
+> `pip install` lines above. It is faster but not required — and the CPU version
+> is much less likely to give you installation trouble.
+
+---
+
+## Step 3 — Quick test (2 scenarios, about 1 minute)
+
+Before the long run, check everything is wired up:
+
+```bash
+python scripts/plot_bus_profiles.py \
+  --PARQUET data/SimBench_ppcY_backbone_dc_compile_ppNR_ls0.60-1.40_u0clean_sgenpert_pvqvstart_siNR_38649_NR_branchrows_directSI.parquet \
+  --ckpt_pignn ckpt/pfv2_pignn_SimBench_b32_40_best_model.ckpt \
+  --n 100 --limit 2 \
+  --out_dir results
 ```
 
-If `scp` asks for a password, use the server account password provided by the
-project owner.
+On Windows PowerShell, replace each `\` at the end of a line with a backtick `` ` ``.
 
-## 3. Python Environment
+**What you should see**, among other output:
 
-Recommended:
-
-- Windows 10/11
-- NVIDIA GPU with CUDA support
-- Python 3.10 or 3.11
-- A CUDA-enabled PyTorch install
-
-Create and activate a virtual environment:
-
-```powershell
-py -3.10 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip setuptools wheel
+```
+[split] test=12887
+[models] ['PIGNN']
+done: 2 scenarios -> results
 ```
 
-Install PyTorch. Example for CUDA 12.1:
+Now open the picture that was created:
 
-```powershell
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+```
+results/scenario_000_row000035/bus_profiles.png
 ```
 
-Install `torch_scatter`. The URL must match your PyTorch and CUDA version.
-For PyTorch `2.4.x` with CUDA 12.1, for example:
+It should show 12 graphs in 3 rows and 4 columns. The blue line is the
+reference answer; the red dashed line is what the model produced. In the top
+row (PIGNN) the two lines should sit almost exactly on top of each other.
 
-```powershell
-pip install torch-scatter -f https://data.pyg.org/whl/torch-2.4.0+cu121.html
+If you got here, everything works.
+
+---
+
+## Step 4 — Measure the accuracy
+
+This runs the model over the whole held-out test set and prints the numbers:
+
+```bash
+python scripts/rescore_pignn.py \
+  --PARQUET data/SimBench_ppcY_backbone_dc_compile_ppNR_ls0.60-1.40_u0clean_sgenpert_pvqvstart_siNR_38649_NR_branchrows_directSI.parquet \
+  --ckpt ckpt/pfv2_pignn_SimBench_b32_40_best_model.ckpt \
+  --grid SimBench \
+  --BATCH 8 \
+  --d 4 --d_hi 24 --n_heads 8 --num_attn_layers 8 --K 40 \
+  --armijo_mode geometric_safe \
+  --physics_loss_form logcosh \
+  --train_ratio 0.3333 --valid_ratio 0.3333 --seed_value 42 \
+  --max_test_samples 400
 ```
 
-If your PyTorch version is different, replace the wheel URL accordingly, e.g.
-`torch-2.5.0+cu121.html`, `torch-2.6.0+cu121.html`, etc.
+**What you should see:** one long line beginning with `RESCORE`, followed by
+results in `{"name": number, ...}` form. Four of them matter:
 
-Install the remaining packages:
+| Name in the output | What it means | Expected |
+|---|---|---|
+| `rmse_vmag_pu` | voltage magnitude error | about `1.5e-03` |
+| `rmse_theta_deg` | voltage angle error | about `1.0e-01` |
+| `R2_vmag` | how much of the voltage variation the model explains, 1.0 is perfect | about `0.999` |
+| `slope_vmag` | 1.0 means it captures the full swing, 0 means it just predicts an average | about `0.997` |
 
-```powershell
-pip install numpy pandas pyarrow matplotlib
+The last two are the real test. A model can post a small error simply by
+guessing "every bus is at 1.0" — `R2_vmag` and `slope_vmag` near 1.0 are what
+show it is genuinely following the answer.
+
+`--max_test_samples 400` keeps this to a couple of minutes. Remove that line to
+score all 12,887 test scenarios instead; that takes 30–60 minutes on a CPU and
+gives `rmse_vmag_pu` 1.52e-03 and `rmse_theta_deg` 9.96e-02, the published
+figures.
+
+Power mismatch numbers are not printed here — they come from Step 5.
+
+> If the numbers are far off, the most likely cause is a changed setting.
+> `--armijo_mode geometric_safe` in particular must stay as written: a
+> different value still loads the model but changes what it computes.
+
+---
+
+## Step 5 — Make all 100 plots
+
+Same command as Step 3, just without `--limit 2`:
+
+```bash
+python scripts/plot_bus_profiles.py \
+  --PARQUET data/SimBench_ppcY_backbone_dc_compile_ppNR_ls0.60-1.40_u0clean_sgenpert_pvqvstart_siNR_38649_NR_branchrows_directSI.parquet \
+  --ckpt_pignn ckpt/pfv2_pignn_SimBench_b32_40_best_model.ckpt \
+  --n 100 \
+  --out_dir results
 ```
 
-Quick environment check:
+This takes about 10–15 minutes on a CPU. It creates one folder per scenario:
 
-```powershell
-python -c "import torch, numpy, pandas, pyarrow, torch_scatter; print('torch:', torch.__version__); print('cuda available:', torch.cuda.is_available()); print('gpu:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU only'); print('numpy:', numpy.__version__); print('pandas:', pandas.__version__); print('pyarrow:', pyarrow.__version__)"
+```
+results/scenario_000_row000035/bus_profiles.png     the picture
+results/scenario_000_row000035/metrics.json         that scenario's numbers
+results/summary.json                                all 100 scenarios
 ```
 
-## 4. Use the Stored Checkpoint
+Roughly 100 MB in total.
 
-After downloading the checkpoint directory above, evaluate the stored best model
-without retraining:
+---
 
-```powershell
-python -u train_valid_test.py `
-  --mode test `
-  --EPOCHS=40 `
-  --BATCH=16 `
-  --LR=3e-6 `
-  --seed_value=42 `
-  --train_ratio=0.3333 `
-  --valid_ratio=0.3333 `
-  --lr_scheduler=CosineAnnealingLR `
-  --PARQUET "C:\data\SimBench_snapshot_envelope_manual_flat_100MVA_coupled_ppcY_manual_flat_siNR_36000_NR_branchrows_directSI.parquet" `
-  --PER_UNIT `
-  --target_S_base 1e8 `
-  --share_grid `
-  --dataset_complex_dtype complex128 `
-  --vlimit `
-  --model GNSMsg_EdgeSelfAttn `
-  --armijo_mode=fixed `
-  --armijo_rho=0.5 `
-  --armijo_max_backtracks=5 `
-  --armijo_min_alpha=0.0625 `
-  --PINN `
-  --log_to_file `
-  --log_dir ".\results\logs\simbench_local_eval_attn10_novn" `
-  --ckpt_dir ".\results\ckpt\simbench_manual_flat_fixed_armijo_20260615_190832" `
-  --run_name simbench_flat_fix_pinn_b16_lr3e-6_K40_dhi16_h8_attn10_novn `
-  --d=4 `
-  --d_hi=16 `
-  --n_heads=8 `
-  --num_attn_layers=10 `
-  --K=40 `
-  --use_armijo
-```
+## How to read the plots
 
-Important: `train_valid_test.py` finds the checkpoint by combining
-`--ckpt_dir`, `--run_name`, and `--EPOCHS`. Therefore these three values must
-match the stored checkpoint filename:
+Each picture is one scenario — one snapshot of the grid. The horizontal axis is
+the bus number, 0 to 93.
 
-```text
-simbench_flat_fix_pinn_b16_lr3e-6_K40_dhi16_h8_attn10_novn_40_best_model.ckpt
-```
+**The columns** are the four quantities:
 
-## 5. Recommended Training Command
+| Column | Meaning |
+|---|---|
+| `|V|` | voltage magnitude at each bus |
+| `theta` | voltage angle at each bus |
+| `P` | active power injected at each bus |
+| `Q` | reactive power injected at each bus |
 
-This is the best-performing SimBench setting from the finished batch:
+**The rows** are three different ways of getting an answer:
 
-```powershell
-python -u train_valid_test.py `
-  --EPOCHS=40 `
-  --BATCH=16 `
-  --LR=3e-6 `
-  --seed_value=42 `
-  --train_ratio=0.3333 `
-  --valid_ratio=0.3333 `
-  --lr_scheduler=CosineAnnealingLR `
-  --PARQUET "C:\data\SimBench_snapshot_envelope_manual_flat_100MVA_coupled_ppcY_manual_flat_siNR_36000_NR_branchrows_directSI.parquet" `
-  --PER_UNIT `
-  --target_S_base 1e8 `
-  --share_grid `
-  --dataset_complex_dtype complex128 `
-  --vlimit `
-  --model GNSMsg_EdgeSelfAttn `
-  --armijo_mode=fixed `
-  --armijo_rho=0.5 `
-  --armijo_max_backtracks=5 `
-  --armijo_min_alpha=0.0625 `
-  --PINN `
-  --log_to_file `
-  --log_dir ".\results\logs\simbench_local_attn10_novn" `
-  --ckpt_dir ".\results\ckpt\simbench_local_attn10_novn" `
-  --run_name simbench_flat_fix_pinn_b16_lr3e-6_K40_dhi16_h8_attn10_novn `
-  --d=4 `
-  --d_hi=16 `
-  --n_heads=8 `
-  --num_attn_layers=10 `
-  --K=40 `
-  --use_armijo
-```
+| Row | What it is |
+|---|---|
+| `PIGNN` | the trained model — this is what we are testing |
+| `DC init` | the rough starting guess, before any solving. The "do nothing" baseline |
+| `custom NR` | a classical Newton-Raphson solver, for comparison |
 
-The script will:
+**Blue is always the reference answer** (pandapower, the standard solver).
+Red dashed is the row's own answer. The `RMSE` in each title is the average
+error in that panel — smaller is better.
 
-1. split the 36,000 cases into train / validation / test,
-2. train for 40 epochs,
-3. save the best validation checkpoint under `.\results\ckpt\...`,
-4. reload the best checkpoint,
-5. report final test metrics.
+What you should notice:
 
-## 6. Model Configuration
+- **PIGNN** sits almost on top of the blue line.
+- **DC init** is visibly flat and wrong — that is the point, it shows how much
+  work the model is actually doing.
+- **custom NR** matches blue to about 14 decimal places, which confirms the
+  comparison itself is set up correctly.
+
+Typical values across the 100 scenarios:
+
+| Row | `|V|` error | `theta` error |
+|---|---|---|
+| PIGNN | 7.06e-04 pu | 0.044 degrees |
+| DC init | 5.25e-02 pu | 2.55 degrees |
+| custom NR | 2.15e-14 pu | 1.10e-12 degrees |
+
+So the model is about **74 times more accurate than the starting guess** on
+voltage magnitude, and about **58 times** on angle.
+
+---
+
+## How the model was trained
+
+The full record is in `CONFIG.txt`. The short version:
 
 | Item | Value |
-|---|---:|
-| model | `GNSMsg_EdgeSelfAttn` |
-| graph input | branch-row direct-SI parquet |
-| per-unit mode | enabled |
-| target S base | `1e8 VA` = 100 MVA |
-| dataset complex dtype | `complex128` |
-| shared grid cache | enabled via `--share_grid` |
-| loss | PINN physics loss only |
-| MSE loss weight | `0.0` |
-| K iterative steps | `40` |
-| hidden size `d_hi` | `16` |
-| node/message dimension `d` | `4` |
-| attention heads | `8` |
-| attention layers | `10` |
-| Armijo mode | `fixed` |
-| Armijo rho | `0.5` |
-| Armijo max backtracks | `5` |
-| Armijo min alpha | `0.0625` |
-| batch size | `16` |
-| learning rate | `3e-6` |
-| epochs | `40` |
-| scheduler | `CosineAnnealingLR` |
-| voltage magnitude limit | enabled via `--vlimit` |
-| `vn_feat` | disabled for best run |
+|---|---|
+| model | `GNSMsg_EdgeSelfAttn` (PIGNN-Attn-LS), 65,896 parameters |
+| grid | SimBench, 94 buses |
+| dataset | ppNR v2 corpus, 38,649 scenarios, pandapower NR labels |
+| test split | 12,887 scenarios (seed 42) |
+| epochs | 40 |
+| batch / learning rate | 32 / 1e-4 |
+| solver steps `K` | 40 |
+| line search | Armijo, `geometric_safe` |
+| loss | MSE + physics residual (logcosh) |
 
-## 7. Smaller-GPU Options
+---
 
-If your GPU runs out of memory, lower the batch size first:
+## If something goes wrong
 
-```powershell
---BATCH=8
-```
+**`scp` asks for a password over and over**
+You are probably not on the FAU VPN. Connect and try again.
 
-If it is still too slow, test the smaller attention-depth version:
+**The data file size is not 448628631**
+The download was cut short. Delete the folder and redo Step 1.
 
-```powershell
---num_attn_layers=4
-```
+**`ModuleNotFoundError: torch_scatter`**
+The `torch-scatter` line in Step 2 did not run or did not match your PyTorch
+version. Check with `python -c "import torch; print(torch.__version__)"` and
+use that version number in the wheel URL, for example
+`https://data.pyg.org/whl/torch-2.4.0+cpu.html`.
 
-The `attn4` run is faster, but it was less accurate than `attn10` in this
-experiment.
+**`ModuleNotFoundError: gridfm_graphkit` or `gridsfm` or `lumina_inference`**
+Those are only needed for three other models that are not part of this package.
+Make sure your command has only `--ckpt_pignn` and no other `--ckpt_*` option.
 
-## 8. Completed SimBench Results
+**It is very slow**
+Normal on CPU: about 8 seconds per scenario. Use `--limit 10` to do fewer.
 
-All results below used:
-
-```text
-K=40, d=4, d_hi=16, n_heads=8, BATCH=16, LR=3e-6,
-PINN only, fixed Armijo, dataset_complex_dtype=complex128,
-PER_UNIT target_S_base=100 MVA, share_grid=True
-```
-
-### Validation Metrics at Epoch 40
-
-| Case | Val \|V\| RMSE | Val theta RMSE | Val Delta P inf | Val Delta Q inf | mean \|Delta P\| | mean \|Delta Q\| | p95 \|Delta P\| | p95 \|Delta Q\| |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| attn10 no-vn | 4.938e-2 | 9.156 deg | 3.304e-1 | 1.886e-1 | 1.053e-1 | 2.497e-2 | 2.967e-1 | 8.796e-2 |
-| attn8 no-vn | 6.795e-2 | 15.043 deg | 5.167e-1 | 3.133e-1 | 1.884e-1 | 5.456e-2 | 4.564e-1 | 1.921e-1 |
-| attn4 no-vn | 3.972e-2 | 16.300 deg | 8.353e-1 | 1.368e-1 | 2.160e-1 | 3.993e-2 | 4.858e-1 | 1.113e-1 |
-| attn8 vn | 2.520e-2 | 17.348 deg | 8.807e-1 | 6.239e-1 | 2.505e-1 | 8.171e-2 | 6.019e-1 | 2.089e-1 |
-| attn10 vn | 4.537e-2 | 18.121 deg | 1.031e0 | 4.890e-1 | 2.688e-1 | 6.041e-2 | 8.473e-1 | 2.143e-1 |
-| attn4 vn | 6.602e-2 | 17.874 deg | 1.194e0 | 7.232e-1 | 2.747e-1 | 6.831e-2 | 8.032e-1 | 2.651e-1 |
-
-### Test Metrics
-
-| Case | Test \|V\| RMSE | Test theta RMSE | Test Delta P inf | Test Delta Q inf | mean \|Delta P\| | mean \|Delta Q\| | p95 \|Delta P\| | p95 \|Delta Q\| |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| attn10 no-vn | 4.938e-2 | 9.159 deg | 3.302e-1 | 1.908e-1 | 1.052e-1 | 2.499e-2 | 2.967e-1 | 8.798e-2 |
-| attn8 no-vn | 6.831e-2 | 15.047 deg | 5.171e-1 | 3.219e-1 | 1.884e-1 | 5.510e-2 | 4.568e-1 | 1.941e-1 |
-| attn8 vn | 3.945e-2 | 15.727 deg | 7.788e-1 | 3.065e-1 | 2.268e-1 | 5.257e-2 | 5.178e-1 | 1.744e-1 |
-| attn4 no-vn | 3.971e-2 | 16.301 deg | 8.354e-1 | 1.365e-1 | 2.160e-1 | 3.990e-2 | 4.858e-1 | 1.112e-1 |
-| attn10 vn | 4.058e-2 | 17.811 deg | 1.047e0 | 5.282e-1 | 2.655e-1 | 6.209e-2 | 8.223e-1 | 2.075e-1 |
-| attn4 vn | 6.607e-2 | 17.869 deg | 1.194e0 | 7.197e-1 | 2.747e-1 | 6.872e-2 | 8.041e-1 | 2.654e-1 |
-
-## 9. Interpretation
-
-The best setting is `attn10 no-vn`.
-
-It has the best overall physical residual profile:
-
-- lowest test `Delta P inf`: `3.302e-1 pu`
-- low test `Delta Q inf`: `1.908e-1 pu`
-- lowest mean active-power residual: `1.052e-1 pu`
-- lowest p95 active-power residual: `2.967e-1 pu`
-- best angle RMSE: `9.159 deg`
-
-The `vn_feat` variants were worse for this SimBench run. That is different
-from the LVN Heo1 experiments, where voltage-level information was important.
-For this smaller 94-bus SimBench grid, the extra voltage nominal feature did
-not help under the PINN-only fixed-Armijo recipe.
-
-## 10. Output Files
-
-With the recommended command, logs and checkpoints are written to:
-
-```text
-.\results\logs\simbench_local_attn10_novn
-.\results\ckpt\simbench_local_attn10_novn
-```
-
-The best checkpoint filename follows:
-
-```text
-simbench_flat_fix_pinn_b16_lr3e-6_K40_dhi16_h8_attn10_novn_40_best_model.ckpt
-```
-
-At the end of training, `train_valid_test.py` automatically reloads this best
-checkpoint and reports test metrics.
-
-## 11. Common Issues
-
-### `ModuleNotFoundError: torch_scatter`
-
-Install the `torch-scatter` wheel that exactly matches your PyTorch and CUDA
-version. The package is not usually installed by plain `pip install
-torch-scatter` on Windows.
-
-### CUDA is not detected
-
-Check:
-
-```powershell
-python -c "import torch; print(torch.cuda.is_available())"
-```
-
-If it prints `False`, reinstall PyTorch with a CUDA wheel.
-
-### Out of memory
-
-Use:
-
-```powershell
---BATCH=8
-```
-
-or, for a quick smoke test:
-
-```powershell
---max_train_samples=512 --max_valid_samples=512 --max_test_samples=512 --EPOCHS=2
-```
-
-### Training is slow
-
-The recommended run uses `complex128` for accurate residual metrics. If you
-only want a quick development test, use:
-
-```powershell
---dataset_complex_dtype complex64
-```
-
-For final reporting, use `complex128`.
+**The plots look empty or the run crashes near the end**
+Make sure `scripts/newton_raphson_improved.py` is still in the `scripts` folder.
+It is needed for the bottom row.
